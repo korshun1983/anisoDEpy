@@ -1,23 +1,10 @@
 # parsing file with input model parameters
 
-from pprint import pprint
-
-import numpy as np
+from structures import InputParams
 from ast import literal_eval
 import re
 
-class inputModel():
-    pass
-
-class advanced():
-    pass
-
-class mesh():
-    pass
-
-inputParams = inputModel()
-inputParams.advanced = advanced()
-inputParams.mesh = mesh()
+inputParams = InputParams()
 
 # # Set the geometry of the model - positions of layer boundaries and interfaces, in meters or wavelength
 # inputParams.DomainRx = [0.1, 2.0] #positions of layer boundaries along x axis(from inner to outer)
@@ -212,3 +199,5 @@ with open("Bakken-B-00.m") as fid:
             inputParams.mesh.output = get_data_from_line(line)
         elif line.startswith('Mesh.ext_boundary_shape'):
             inputParams.mesh.ext_boundary_shape = get_data_from_line(line)
+
+stop = 1
