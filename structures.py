@@ -1,4 +1,6 @@
-class AdvancedParams:
+import routines
+
+class Advanced:
     def __init__(self):
         self.EigSearchStart = 1.0
         self.num_eig_max = 50
@@ -10,7 +12,7 @@ class Mesh:
         self.hmax = 0.05
         self.output = 'no'
 
-class InputParams:
+class Model:
     def __init__(self):
         self.ABC_account_r = 'yes'
         self.ABC_degree = 1.0
@@ -33,6 +35,38 @@ class InputParams:
         self.PML_method = 2.0
         self.RefDomainParam = ([1.0, 2.25],[2.23, 40.9, 8.5, 26.9, 10.5, 15.3, 0, 0])
         self.RefDomainType = 'HTTI'
-        self.Advanced = AdvancedParams()
         self.f_array = []
+
+class Config:
+    def __init__(self):
+        self.ProblemType = ''
+        self.NumMethod = ''
+        self.SpeedUp = ''
+        self.SaveData = ''
+        self.OuterBC = ''
+        self.PML = ''
+        self.Eccentricity = ''
+        self.Symmetry = ''
+        self.EigenVar = ''
+        self.SloUnits = ''
+        self.FreqUnits = 'kHz'
+        self.PressureUnits = 'GPa'
+        self.CheckAsymptote = ''
+        self.DisplayAttenuation = 'yes'
+        self.root_path = ''
+        self.solver_path = ''
+
+class Misc:
+    def __init__(self):
+        self.F_conv = 1.0
+        self.S_conv = 1.0
+
+#global computation structure
+class BigCompStruct:
+    def __init__(self):
+        self.Config = Config()
+        self.Model = Model()
+        self.Advanced = Advanced()
         self.Mesh = Mesh()
+        self.Misc = Misc()
+        self.Methods = routines.Methods()
