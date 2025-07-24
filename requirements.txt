@@ -4,3 +4,4 @@ gmsh~=4.13.1
 meshio~=5.3.5
 matplotlib~=3.10.1
 pandas~=2.2.3
+scipy~=1.15.2

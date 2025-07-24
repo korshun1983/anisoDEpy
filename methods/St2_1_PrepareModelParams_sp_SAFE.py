@@ -1,7 +1,6 @@
-import InputParams from structures
+import bigCompStruct from structures
 
-def St2_1_PrepareModelParams_sp_SAFE(CompStruct: InputParams):
-
+def St2_1_PrepareModelParams_sp_SAFE(CompStruct: bigCompStruct):
     #   Part of the toolbox for solving problems of wave propagation
     # in arbitrary anisotropic inhomogeneous waveguides.
     # For details see User manual
@@ -23,13 +22,13 @@ def St2_1_PrepareModelParams_sp_SAFE(CompStruct: InputParams):
     #
     #  Inputs -
     #
-    #       CompStuct - structure containing the parameters of the model;
+    #       CompStuct - structure containing the parameters of the model
     #
     #  Outputs -
     #
     #       CompStuct - structure containing the parameters of the model after
     #                   update with some advanced parameters like unit
-        #                   computation of positions of harmonics, the unit conversion, etc.    ;
+    #                   computation of positions of harmonics, the unit conversion, etc.
     #
     #  M-files required-
     #
@@ -45,7 +44,7 @@ def St2_1_PrepareModelParams_sp_SAFE(CompStruct: InputParams):
     # ===============================================================================
 
     # Retaining all necessary information
-    # CompStruct = InputParam;
+    # CompStruct = InputParam
 
     # ===============================================================================
     # Modification and preparation of input information
@@ -69,13 +68,12 @@ def St2_1_PrepareModelParams_sp_SAFE(CompStruct: InputParams):
         case 'us/ft':
             CompStruct.Misc.S_conv = 0.3048 * 1e+3
 
-
     # # Define the totatl number of azimuthal harmonics to compute simultaneously -
     # # necessary for anisotropy
-    # CompStruct.Data.N_harmonics = max(size(CompStruct.Model.harmonics));
-    # CompStruct.Data.Pl_modes_index = (CompStruct.Model.harmonics >= 0);
-    # CompStruct.Data.Pl_modes_pos = find(CompStruct.Model.harmonics >= 0);
-    # CompStruct.Data.Num_pl_modes = sum(CompStruct.Data.Pl_modes_index);
+    # CompStruct.Data.N_harmonics = max(size(CompStruct.Model.harmonics))
+    # CompStruct.Data.Pl_modes_index = (CompStruct.Model.harmonics >= 0)
+    # CompStruct.Data.Pl_modes_pos = find(CompStruct.Model.harmonics >= 0)
+    # CompStruct.Data.Num_pl_modes = sum(CompStruct.Data.Pl_modes_index)
 
     # Compute number of computational domains
     CompStruct.Data.N_domain = max(size(CompStruct.Model.DomainType))
@@ -83,40 +81,40 @@ def St2_1_PrepareModelParams_sp_SAFE(CompStruct: InputParams):
     # Compute positions of subdomains and boundaries
     # Domains
     # for ii_l = 1:CompStruct.Data.N_domains
-    # end;
+    # end
 
     # Boundaries
 
     # Compute the array indicating the number of variables,
     # which are required for each layer
     for ii_d in range(1,1,CompStruct.Data.N_domain):
-        match CompStruct.Model.DomainType[ii_d]:
+        match   CompStruct.Model.DomainType[ii_d]:
             case 'fluid':
                 CompStruct.Data.DVarNum[ii_d] = 1
             case 'HTTI':
                 CompStruct.Data.DVarNum[ii_d] = 3
-
 
     # Compute asymptotes, if necessary
     match CompStruct.Config.CheckAsymptote:
         case 'yes':
             CompStruct.Asymp = CompStruct.Methods.ComputeAsymptotes(CompStruct)
             # Adjust the range of phase speeds to study, if necessary
-            if isfield(CompStruct.Asymp, 'V_SH'):
+            if hasattr(CompStruct.Asymp, 'V_SH'):
                 CompStruct.Advanced.V_min = CompStruct.Asymp.V_SH
 
-            if isfield(CompStruct.Asymp, 'V_qP'):
+            if hasattr(CompStruct.Asymp, 'V_qP'):
                 CompStruct.Advanced.V_max = CompStruct.Asymp.V_qP
 
-
+        case 'no':
+            foo = 1
     # ===============================================================================
     # Assign types of layers (cell array)
     # ===============================================================================
-    # CompStruct.Data.LayerType = CompStruct.Model.LayerType;
+    # CompStruct.Data.LayerType = CompStruct.Model.LayerType
 
     # ===============================================================================
     # Assign physical properties of the layers (cell array)
     # For the present time, take data from CompStruct.Model
     # ===============================================================================
 
-
+    return CompStruct
