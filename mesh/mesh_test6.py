@@ -28,12 +28,12 @@ ax.plot_surface(x, y, z, cmap='viridis')
 # Bottom cap
 x_cap_bottom = radius * np.cos(np.linspace(0, 2 * np.pi, num_segments))
 y_cap_bottom = radius * np.sin(np.linspace(0, 2 * np.pi, num_segments))
-ax.plot_collection([ax.plot_surface(x_cap_bottom, y_cap_bottom, 0 * x_cap_bottom, color='gray', alpha=0.5)])
+ax.plot_surface(x_cap_bottom, y_cap_bottom, 0 * x_cap_bottom, color='gray', alpha=0.5)
 
 # Top cap
 x_cap_top = radius * np.cos(np.linspace(0, 2 * np.pi, num_segments))
 y_cap_top = radius * np.sin(np.linspace(0, 2 * np.pi, num_segments))
-ax.plot_collection([ax.plot_surface(x_cap_top, y_cap_top, height * x_cap_top / x_cap_top, color='gray', alpha=0.5)])
+ax.plot_surface(x_cap_top, y_cap_top, height * x_cap_top / x_cap_top, color='gray', alpha=0.5)
 
 
 ax.set_xlabel('X')
