@@ -1,4 +1,4 @@
-import routines
+#import routines
 
 class Advanced:
     def __init__(self):
@@ -22,7 +22,7 @@ class Model:
         self.AddDomainType = 'abc'
         self.BCtype = ['FS','rigid']
         self.DomainEcc = [0, 0]
-        self.DomainNth = [12, 12]
+        self.DomainNth = [12, 12, 12]
         self.DomainParam = ([1.0, 2.25],[2.23, 40.9, 8.5, 26.9, 10.5, 15.3, 0, 0])
         self.DomainRx = [0.1, 2.0]
         self.DomainRy = [0.1, 2.0]
@@ -61,6 +61,11 @@ class Misc:
         self.F_conv = 1.0
         self.S_conv = 1.0
 
+class Data:
+    def __init__(self):
+        self.N_domain = 3
+        self.DvarNum = [1,3,3]
+
 #global computation structure
 class BigCompStruct:
     def __init__(self):
@@ -69,4 +74,5 @@ class BigCompStruct:
         self.Advanced = Advanced()
         self.Mesh = Mesh()
         self.Misc = Misc()
-        self.Methods = routines.Methods()
+        self.Data = Data()
+        #self.Methods = routines.Methods()
