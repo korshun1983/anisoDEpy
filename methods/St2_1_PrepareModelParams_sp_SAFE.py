@@ -1,6 +1,6 @@
-import bigCompStruct from structures
+from structures import BigCompStruct
 
-def St2_1_PrepareModelParams_sp_SAFE(CompStruct: bigCompStruct):
+def St2_1_PrepareModelParams_sp_SAFE(CompStruct: BigCompStruct):
     #   Part of the toolbox for solving problems of wave propagation
     # in arbitrary anisotropic inhomogeneous waveguides.
     # For details see User manual
@@ -76,7 +76,7 @@ def St2_1_PrepareModelParams_sp_SAFE(CompStruct: bigCompStruct):
     # CompStruct.Data.Num_pl_modes = sum(CompStruct.Data.Pl_modes_index)
 
     # Compute number of computational domains
-    CompStruct.Data.N_domain = max(size(CompStruct.Model.DomainType))
+    CompStruct.Data.N_domain = len(CompStruct.Model.DomainType)
 
     # Compute positions of subdomains and boundaries
     # Domains

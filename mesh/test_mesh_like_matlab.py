@@ -20,8 +20,8 @@ CompStruct.Model.DomainEccAngle = [0, 0, 0]
 # Preparing input data for the mesh construction -
 # domain boundaries' nodes, edges, faces
 # ===============================================================================
-Edges = []
-Nodes = []
+Edges = numpy.empty((0,2))
+Nodes = numpy.empty((0,2))
 ed_num = []
 PrevEdgeSize = 0
 
@@ -81,27 +81,29 @@ for ii_d in range(CompStruct.Data.N_domain):
                 XBgrid[ia] = Ry * math.tan(math.pi / 2 - ang)
                 YBgrid[ia] = Ry
 
-DomainBNodes = [XBgrid, YBgrid]
+    DomainBNodes = numpy.empty((len(XBgrid), 2))
+    DomainBNodes[:,0] = XBgrid
+    DomainBNodes[:,1] = YBgrid
 
-# define the edges for the domain boundary
-DomainBEdges = numpy.empty((numpy.size(DomainBNodes,axis=1), 2))
-DomainBEdges[:, 0] = numpy.arange(1, numpy.size(DomainBNodes,axis=1) + 1, 1)
-DomainBEdges[:, 1] = numpy.append(numpy.arange(2, numpy.size(DomainBNodes,axis=1) + 1, 1), 1)
+    # define the edges for the domain boundary
+    DomainBEdges = numpy.empty((numpy.size(DomainBNodes,axis=1), 2))
+    DomainBEdges[:, 0] = numpy.arange(1, numpy.size(DomainBNodes,axis=1) + 1, 1)
+    DomainBEdges[:, 1] = numpy.append(numpy.arange(2, numpy.size(DomainBNodes,axis=1) + 1, 1), 1)
 
-# ed_num=[ed_num; ones(size(node,1),1)*i];
+    # ed_num=[ed_num; ones(size(node,1),1)*i];
 
-# define the start and the end edge for the domain ii_d
-FaceStartEdge = numpy.size(Edges, axis=0) - PrevEdgeSize + 1
+    # define the start and the end edge for the domain ii_d
+    FaceStartEdge = numpy.size(Edges, axis=0) - PrevEdgeSize + 1
 
-FaceEndEdge = numpy.size(numpy.append(Edges, (DomainBEdges + numpy.size(Edges, axis=0)), axis=0), axis=0)
+    FaceEndEdge = numpy.size(numpy.append(Edges, (DomainBEdges + numpy.size(Edges, axis=0)), axis=0), axis=0)
 
-# define the edges that belong to the face of the domain ii_d
-DomainFaces.append(range(FaceStartEdge, FaceEndEdge + 1, 1))
-PrevEdgeSize = numpy.size(DomainBEdges, axis=0)
+    # define the edges that belong to the face of the domain ii_d
+    DomainFaces.append(range(FaceStartEdge, FaceEndEdge + 1, 1))
+    PrevEdgeSize = numpy.size(DomainBEdges, axis=0)
 
-# update the full list of edges and nodes of the domain boundaries
-Edges = numpy.append(Edges, (DomainBEdges + numpy.size(Edges, axis=0)), axis=0)
-Nodes = numpy.append(Nodes, DomainBNodes, axis=0)
+    # update the full list of edges and nodes of the domain boundaries
+    Edges = numpy.append(Edges, (DomainBEdges + numpy.size(Edges, axis=0)), axis=0)
+    Nodes = numpy.append(Nodes, DomainBNodes, axis=0)
 
 # ===============================================================================
 # Constructing triangular mesh based on the supplied model geometry
@@ -134,7 +136,7 @@ tri_refined = Delaunay(all_points)
 plt.triplot(all_points[:, 0], all_points[:, 1], tri_refined.simplices, color='blue', alpha=0.7)
 plt.plot(all_points[:, 0], all_points[:, 1], 'o', markersize=4, color='red')  # Plot all points
 plt.plot(new_points[:, 0], new_points[:, 1], 'o', markersize=4, color='red')  # Plot new points
-plt.title('2D Triangular Mesh with In-Triangle Points')
+plt.title('2D Triangular test Mesh')
 plt.xlabel('X-coordinate')
 plt.ylabel('Y-coordinate')
 plt.grid(True)
