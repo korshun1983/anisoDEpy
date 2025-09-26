@@ -28,6 +28,8 @@ PrevEdgeSize = 0
 
 DomainFaces = []
 
+radii = numpy.empty((3,1))
+
 # construct the lists of nodes, edges, and faces for the domain boundaries
 for ii_d in range(CompStruct.Data.N_domain):
 
@@ -35,8 +37,7 @@ for ii_d in range(CompStruct.Data.N_domain):
     Rx = CompStruct.Model.DomainRx[ii_d]
     Ry = CompStruct.Model.DomainRy[ii_d]
 
-    if ii_d == 2:
-        R = numpy.sqrt(Rx*Rx+Ry*Ry)
+    radii[ii_d] = numpy.sqrt(Rx*Rx+Ry*Ry)
 
     # find the coordinates of the domain center
     ThetaRot = CompStruct.Model.DomainTheta[ii_d]
@@ -148,38 +149,46 @@ for ii_d in range(CompStruct.Data.N_domain):
 # plt.show()
 
 # -------------------------------
-# TODO: adapt options for gmsh mesh construction
-
+# Initialize GMSH
 gmsh.initialize()
-gmsh.model.add("rectangle")
+gmsh.option.setNumber("General.Terminal", 1)  # Print messages to terminal
 
-# --- 1. Define rectangular domain (unit square) ---
-width, height = 1.0, 1.0
-p1 = gmsh.model.geo.addPoint(0,     0, 0)
-p2 = gmsh.model.geo.addPoint(width, 0, 0)
-p3 = gmsh.model.geo.addPoint(width, height, 0)
-p4 = gmsh.model.geo.addPoint(0,     height, 0)
+# Create a new model
+gmsh.model.add("concentric_cylinders")
 
-l1 = gmsh.model.geo.addLine(p1, p2)
-l2 = gmsh.model.geo.addLine(p2, p3)
-l3 = gmsh.model.geo.addLine(p3, p4)
-l4 = gmsh.model.geo.addLine(p4, p1)
+# Define parameters
+num_layers = 3
+center_x, center_y = 0.0, 0.0
+#radii = [0.2, 0.4, 0.6]  # Radii for each concentric layer
 
-cl = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
-surface = gmsh.model.geo.addPlaneSurface([cl])
+# Define mesh sizes (finer mesh for smaller radii)
+#mesh_sizes = [0.02, 0.03, 0.04]
 
+# Create points for each circle
+circle_points = []
+circle_loops = []
+
+for i, radius in enumerate(radii):
+    mesh_size = 0.1 * radii[i]
+    # Create points on the circle (4 points for a circle, we'll create a circle curve later)
+
+    for ind in range(numpy.size(Nodes, axes = 0)*i/3,numpy.size(Nodes, axes = 0)*(i+1)/3):
+        gmsh.model.geo.addPoint(Nodes[ind,0], Nodes[ind,1], 0, mesh_size)
+
+        # Create circle arcs
+        arc1 = gmsh.model.geo.addCircleArc(p1, p2, p2)  # Actually we need to create proper circle curves
+        arc2 = gmsh.model.geo.addCircleArc(p2, p3, p3)
+        arc3 = gmsh.model.geo.addCircleArc(p3, p4, p4)
+        arc4 = gmsh.model.geo.addCircleArc(p4, p1, p1)
+
+    # # Better approach: use the OpenCASCADE kernel for proper circles
+    # circle_points.append([p1, p2, p3, p4])
+
+# Synchronize to make sure all entities are created
 gmsh.model.geo.synchronize()
 
-# --- 2. Mesh with ~50 elements ---
-# characteristic length controls density
-target_triangles = 50
-domain_area = width * height
-avg_area = domain_area / target_triangles
-# edge length ~ sqrt(2 * area) for triangles
-char_len = (2 * avg_area) ** 0.5
-
-gmsh.option.setNumber("Mesh.CharacteristicLengthMin", char_len)
-gmsh.option.setNumber("Mesh.CharacteristicLengthMax", char_len)
+# Set mesh algorithm (1 = MeshAdapt, 5 = Delaunay, 6 = Frontal, 7 = BAMG, 8 = Delaunay for quads, 9 = Packing of Parallelograms)
+gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay for triangles
 
 gmsh.model.mesh.generate(2)
 
