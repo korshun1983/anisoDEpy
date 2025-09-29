@@ -2,7 +2,7 @@
 import math
 import numpy
 import matplotlib.pyplot as plt
-from scipy.spatial import Delaunay
+import matplotlib.tri as tri
 import gmsh
 
 from structures import BigCompStruct
@@ -37,7 +37,7 @@ for ii_d in range(CompStruct.Data.N_domain):
     Rx = CompStruct.Model.DomainRx[ii_d]
     Ry = CompStruct.Model.DomainRy[ii_d]
 
-    radii[ii_d] = numpy.sqrt(Rx*Rx+Ry*Ry)
+    radii[ii_d] = Rx #for circular grid
 
     # find the coordinates of the domain center
     ThetaRot = CompStruct.Model.DomainTheta[ii_d]
@@ -151,62 +151,76 @@ for ii_d in range(CompStruct.Data.N_domain):
 # -------------------------------
 # Initialize GMSH
 gmsh.initialize()
-gmsh.option.setNumber("General.Terminal", 1)  # Print messages to terminal
+gmsh.model.add("concentric_cylinders_simple")
 
-# Create a new model
-gmsh.model.add("concentric_cylinders")
+# Use OpenCASCADE kernel for better geometry handling
+gmsh.option.setNumber("Geometry.OCCBoundsUseStl", 1)
 
-# Define parameters
-num_layers = 3
-center_x, center_y = 0.0, 0.0
-#radii = [0.2, 0.4, 0.6]  # Radii for each concentric layer
+# Create concentric disks
+center_x = Xc
+center_y = Yc
 
-# Define mesh sizes (finer mesh for smaller radii)
-#mesh_sizes = [0.02, 0.03, 0.04]
+# Create disks
+# disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
+disk2 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[1], radii[1])
+disk3 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[2], radii[2])
 
-# Create points for each circle
-circle_points = []
-circle_loops = []
+# Create annular regions by cutting inner disks from outer ones
+# annulus2 = gmsh.model.occ.cut([(2, disk2)], [(2, disk1)])
+annulus3 = gmsh.model.occ.cut([(2, disk3)], [(2, disk2)])
 
-for i, radius in enumerate(radii):
-    mesh_size = 0.1 * radii[i]
-    # Create points on the circle (4 points for a circle, we'll create a circle curve later)
+disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
+disk2 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[1], radii[1])
+annulus2 = gmsh.model.occ.cut([(2, disk2)], [(2, disk1)])
 
-    for ind in range(numpy.size(Nodes, axes = 0)*i/3,numpy.size(Nodes, axes = 0)*(i+1)/3):
-        gmsh.model.geo.addPoint(Nodes[ind,0], Nodes[ind,1], 0, mesh_size)
+disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
 
-        # Create circle arcs
-        arc1 = gmsh.model.geo.addCircleArc(p1, p2, p2)  # Actually we need to create proper circle curves
-        arc2 = gmsh.model.geo.addCircleArc(p2, p3, p3)
-        arc3 = gmsh.model.geo.addCircleArc(p3, p4, p4)
-        arc4 = gmsh.model.geo.addCircleArc(p4, p1, p1)
+gmsh.model.occ.synchronize()
 
-    # # Better approach: use the OpenCASCADE kernel for proper circles
-    # circle_points.append([p1, p2, p3, p4])
+# Set mesh sizes
+gmsh.option.setNumber("Mesh.MeshSizeMin", radii[0]*.1)
+gmsh.option.setNumber("Mesh.MeshSizeMax", radii[2]*.1)
 
-# Synchronize to make sure all entities are created
-gmsh.model.geo.synchronize()
-
-# Set mesh algorithm (1 = MeshAdapt, 5 = Delaunay, 6 = Frontal, 7 = BAMG, 8 = Delaunay for quads, 9 = Packing of Parallelograms)
-gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay for triangles
-
+# Generate mesh
 gmsh.model.mesh.generate(2)
 
-# --- 3. Extract mesh data ---
-nodes = gmsh.model.mesh.getNodes()
-node_coords = nodes[1].reshape(-1, 3)
-elements = gmsh.model.mesh.getElementsByType(2)[1].reshape(-1, 3) - 1  # 2 = triangle
+# Get all mesh nodes
+node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
 
-print(f"Generated {len(elements)} triangles")
+# Reshape coordinates to (n_nodes, 3)
+nodes = node_coords.reshape(-1, 3)
 
-# --- 4. Compute centroids ---
-centroids = node_coords[elements][:, :, :2].mean(axis=1)
+# Get only x, y coordinates (ignore z for 2D)
+x = nodes[:, 0]
+y = nodes[:, 1]
 
-# --- 5. Plot mesh + centroids ---
-plt.triplot(node_coords[:,0], node_coords[:,1], elements, color="k", lw=0.7)
-plt.scatter(centroids[:,0], centroids[:,1], color="red", s=10, label="Centroids")
-plt.legend()
-plt.gca().set_aspect("equal")
+# Get all 2D elements (triangles)
+element_types, element_tags, node_tags_elements = gmsh.model.mesh.getElements(2)
+
+# Find triangles (element type 2 in GMSH)
+triangles = []
+for i, elem_type in enumerate(element_types):
+    if elem_type == 2:  # 3-node triangle
+        # Node tags for triangles
+        tri_node_tags = node_tags_elements[i]
+        # Reshape to (n_triangles, 3)
+        triangles = tri_node_tags.reshape(-1, 3) - 1  # Convert to 0-based indexing
+
+# Create matplotlib triangulation
+triangulation = tri.Triangulation(x, y, triangles)
+
+# Create the plot
+plt.figure(figsize=(12, 10))
+
+# Plot the mesh
+plt.triplot(triangulation, 'k-', linewidth=0.5, alpha=0.6)
+plt.plot(x, y, 'o', markersize=1, alpha=0.5)
+
+# Customize the plot
+plt.title('2D Mesh for Concentric Cylindrical Layers', fontsize=14, fontweight='bold')
+plt.xlabel('X coordinate', fontsize=12)
+plt.ylabel('Y coordinate', fontsize=12)
+plt.grid(True, alpha=0.3)
+plt.axis('equal')
+
 plt.show()
-
-gmsh.finalize()
