@@ -224,3 +224,64 @@ plt.grid(True, alpha=0.3)
 plt.axis('equal')
 
 plt.show()
+
+# Upgrade element order to cubic (order=3)
+gmsh.option.setNumber("Mesh.ElementOrder", 3)
+gmsh.model.mesh.setOrder(3)
+
+# Get all mesh nodes after upgrading
+node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+node_coords = node_coords.reshape(-1, 3)
+
+# Get triangular elements (type=2 for linear, 9 for quadratic, 21 for cubic triangles)
+etype = 21  # 3rd-order triangle
+elemTags, elemNodeTags = gmsh.model.mesh.getElementsByType(etype)
+
+# Original (corner) nodes: take the first 3 from each element
+orig_nodes = []
+new_nodes = []
+for i in range(0, len(elemNodeTags), 10):  # 10 nodes per cubic triangle
+    # First 3 are corners
+    for n in elemNodeTags[i:i+3]:
+        orig_nodes.append(n)
+    # Last 7 are new (edge + centroid)
+    for n in elemNodeTags[i+3:i+10]:
+        new_nodes.append(n)
+
+# Remove duplicates
+orig_nodes = list(set(orig_nodes))
+new_nodes = list(set(new_nodes))
+
+# Map node tags to coordinates
+coords_dict = {node_tags[i]: node_coords[i] for i in range(len(node_tags))}
+
+orig_coords = [coords_dict[n][:2] for n in orig_nodes]
+new_coords = [coords_dict[n][:2] for n in new_nodes]
+
+# Plotting
+fig, ax = plt.subplots()
+
+# --- Draw triangle edges using corner nodes only ---
+for i in range(0, len(elemNodeTags), 10):
+    n1, n2, n3 = elemNodeTags[i:i+3]  # corner nodes
+    x1, y1 = coords_dict[n1][:2]
+    x2, y2 = coords_dict[n2][:2]
+    x3, y3 = coords_dict[n3][:2]
+    ax.plot([x1, x2], [y1, y2], 'k-', lw=0.5)
+    ax.plot([x2, x3], [y2, y3], 'k-', lw=0.5)
+    ax.plot([x3, x1], [y3, y1], 'k-', lw=0.5)
+
+# --- Plot nodes ---
+if orig_coords:
+    ox, oy = zip(*orig_coords)
+    ax.scatter(ox, oy, color="blue", label="Original nodes (order 2)")
+
+if new_coords:
+    nx, ny = zip(*new_coords)
+    ax.scatter(nx, ny, color="red", s=15, marker="o", label="New cubic nodes")
+
+ax.set_aspect("equal")
+ax.legend()
+plt.show()
+
+gmsh.finalize()
