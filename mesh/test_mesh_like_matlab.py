@@ -110,78 +110,86 @@ for ii_d in range(CompStruct.Data.N_domain):
     Edges = numpy.append(Edges, (DomainBEdges + numpy.size(Edges, axis=0)), axis=0)
     Nodes = numpy.append(Nodes, DomainBNodes, axis=0)
 
-# ===============================================================================
-# Constructing triangular mesh based on the supplied model geometry
-# ===============================================================================
-# CurDir = cd(CompStruct.Config.root_path)
-# cd('routines\Mesh2d v24\')
-# [MeshNodes, MeshTri, MeshFaceNums, ~, ~, ~, CompStruct] = CompStruct.Methods.MeshFaces(Nodes, Edges, DomainFaces, CompStruct)
-# cd(CurDir)
-
-# # 2. Perform Delaunay triangulation
-# tri = Delaunay(Nodes)
-#
-# # 3. Add additional points within each triangle (e.g., centroids)
-# new_points = []
-# for simplex in tri.simplices:
-#     triangle_points = Nodes[simplex]
-#     centroid = numpy.mean(triangle_points, axis=0)
-#     new_points.append(centroid)
-#
-# # Convert new_points to a NumPy array and combine with original points
-# new_points = numpy.array(new_points)
-# all_points = Nodes
-# # all_points = np.vstack((points, new_points))
-#
-# # Re-triangulate with the expanded set of points
-# tri_refined = Delaunay(all_points)
-#
-# # 4. Visualize the mesh
-# # plt.figure(figsize=(8, 6))
-# plt.triplot(all_points[:, 0], all_points[:, 1], tri_refined.simplices, color='blue', alpha=0.7)
-# plt.plot(all_points[:, 0], all_points[:, 1], 'o', markersize=4, color='red')  # Plot all points
-# plt.plot(new_points[:, 0], new_points[:, 1], 'o', markersize=4, color='red')  # Plot new points
-# plt.title('2D Triangular test Mesh')
-# plt.xlabel('X-coordinate')
-# plt.ylabel('Y-coordinate')
-# plt.grid(True)
-# plt.gca().set_aspect('equal', adjustable='box')  # Ensure equal aspect ratio
-# plt.show()
 
 # -------------------------------
 # Initialize GMSH
 gmsh.initialize()
-gmsh.model.add("concentric_cylinders_simple")
 
-# Use OpenCASCADE kernel for better geometry handling
-gmsh.option.setNumber("Geometry.OCCBoundsUseStl", 1)
-
-# Create concentric disks
-center_x = Xc
-center_y = Yc
-
-# Create disks
+## Alternate (easy) method for concentric circle geometry domain adding
+# # Use OpenCASCADE kernel for better geometry handling
+# gmsh.option.setNumber("Geometry.OCCBoundsUseStl", 1)
+#
+# # Create concentric disks
+# center_x = Xc
+# center_y = Yc
+#
+# # Create disks
+# # disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
+# disk2 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[1], radii[1])
+# disk3 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[2], radii[2])
+#
+# # Create annular regions by cutting inner disks from outer ones
+# # annulus2 = gmsh.model.occ.cut([(2, disk2)], [(2, disk1)])
+# annulus3 = gmsh.model.occ.cut([(2, disk3)], [(2, disk2)])
+#
 # disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
-disk2 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[1], radii[1])
-disk3 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[2], radii[2])
-
-# Create annular regions by cutting inner disks from outer ones
+# disk2 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[1], radii[1])
 # annulus2 = gmsh.model.occ.cut([(2, disk2)], [(2, disk1)])
-annulus3 = gmsh.model.occ.cut([(2, disk3)], [(2, disk2)])
+#
+# disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
 
-disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
-disk2 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[1], radii[1])
-annulus2 = gmsh.model.occ.cut([(2, disk2)], [(2, disk1)])
+## Method of direct points adding
+boundary_pts = numpy.array(Nodes[48:,:])
 
-disk1 = gmsh.model.occ.addDisk(center_x, center_y, 0, radii[0], radii[0])
-
-gmsh.model.occ.synchronize()
+interior_pts = numpy.array(Nodes[:47,:])
 
 # Set mesh sizes
-gmsh.option.setNumber("Mesh.MeshSizeMin", radii[0]*.1)
-gmsh.option.setNumber("Mesh.MeshSizeMax", radii[2]*.1)
+mesh_size_min = radii[0]*.2
+mesh_size_max = radii[2]*.2
+gmsh.model.add("custom_polygon_mesh")
 
-# Generate mesh
+# -------------------------------------------------
+# Step 1: Create boundary polygon
+# -------------------------------------------------
+boundary_tags = []
+for (x, y) in boundary_pts:
+    tag = gmsh.model.geo.addPoint(x, y, 0, mesh_size_max)
+    boundary_tags.append(tag)
+
+# Connect points with lines in order
+line_tags = []
+for i in range(len(boundary_tags)):
+    ltag = gmsh.model.geo.addLine(boundary_tags[i],
+                                  boundary_tags[(i + 1) % len(boundary_tags)])
+    line_tags.append(ltag)
+
+# Form a closed loop and a surface
+loop = gmsh.model.geo.addCurveLoop(line_tags)
+surface = gmsh.model.geo.addPlaneSurface([loop])
+
+# -------------------------------------------------
+# Step 2: Add interior points and embed them
+# -------------------------------------------------
+interior_tags = []
+for (x, y) in interior_pts:
+    tag = gmsh.model.geo.addPoint(x, y, 0, mesh_size_min)
+    interior_tags.append(tag)
+
+gmsh.model.geo.synchronize()
+
+# Embed these points in the surface so they become mesh nodes
+# gmsh.model.mesh.embed(0, interior_tags, 2, [surface])
+
+# -------------------------------------------------
+# Step 3: Set meshing options
+# -------------------------------------------------
+gmsh.option.setNumber("Mesh.CharacteristicLengthMin", mesh_size_min)
+gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size_max)
+gmsh.option.setNumber("Mesh.Algorithm", 6)  # Delaunay
+
+# -------------------------------------------------
+# Step 4: Generate the 2D triangular mesh
+# -------------------------------------------------
 gmsh.model.mesh.generate(2)
 
 # Get all mesh nodes
