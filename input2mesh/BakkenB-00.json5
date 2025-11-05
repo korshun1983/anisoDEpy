@@ -1,0 +1,48 @@
+// Bakken Model (00 degrees inclination) Configuration
+{
+  // Model geometry and domain settings
+  "Model": {
+    // Positions of layer boundaries (from inner to outer)
+    "DomainRx": [0.1, 2.0],
+    "DomainRy": [0.1, 2.0],
+    "DomainTheta": [0, 0],     // rotation in radians
+    "DomainEcc": [0, 0],       // eccentricity in meters
+    "DomainEccAngle": [0, 0],  // azimuthal shift in radians
+
+    // Layer types: 'fluid' - ideal fluid, 'HTTI' - TTI homogeneous
+    "DomainType": ["fluid", "HTTI"],
+
+    // Additional domain parameters
+    "AddDomainLoc": "ext",     // 'ext' - external, 'int' - internal
+    "AddDomainType": "abc",    // pml, abc, abc+pml or pml+abc
+    "AddDomainL": 1.0,         // layer length in wavelength of V_SH
+
+    // PML layer settings
+    "PML_factor": 10,
+    "PML_degree": 2.0,
+    "PML_method": 1.0,         // 1 - Circle PML, 2 - Rectangle PML
+
+    // Frequency range in kHz
+    "f_array_range": {
+      "start": 0.5,
+      "step": 0.25,
+      "end": 15.0
+    },
+
+    // Physical properties
+    "DomainParam": [
+      [1.0, 2.25],  // fluid: [density, lambda]
+      [2.23, 40.9, 8.5, 26.9, 10.5, 15.3, 0, 0]  // solidTTI: [density, c11, c13, c33, c44, c66, dip, azimuth]
+    ]
+  },
+
+  // Advanced computation settings
+  "Advanced": {
+    "num_eig_max": 50,        // number of eigenvalues to compute
+    "EigSearchStart": 1.0     // starting velocity for eigenvalue search
+  },
+
+  "Mesh": {
+    "output": "yes"  // display mesh: 'yes' or 'no'
+  }
+}
