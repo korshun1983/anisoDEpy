@@ -1,5 +1,5 @@
 # simple_mesh_test_ide.py
-import pyjson5 as json5
+import json
 import gmsh
 import math
 import os
@@ -10,7 +10,7 @@ from matplotlib.collections import PatchCollection
 import matplotlib.tri as tri
 
 # ==================== SETTINGS ====================
-CONFIG_FILE = "BakkenB-00.json5"
+CONFIG_FILE = "BakkenB-00.json"
 
 SAVE_MESH = True
 SHOW_VISUALIZATION = True
@@ -29,7 +29,7 @@ class SimpleMeshGenerator:
 
     def load_config(self):
         with open(self.config_file, 'r') as f:
-            return json5.load(f)
+            return json.load(f)
 
     def get_frequency_from_user(self):
         """Get frequency from user input in kHz"""
