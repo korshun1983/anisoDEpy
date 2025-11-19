@@ -19,13 +19,42 @@ logger = logging.getLogger(__name__)
 def load_config(case_dir: str) -> Dict[str, Any]:
     """
     Load configuration from JSON file in the case directory.
-    Assumes the JSON file is named {case_name}.json (e.g., Bakken-B.json)
+    Displays numbered list of files containing the directory name
+    and lets user select which one to load.
     """
-    json_file = os.path.join(case_dir, f"{os.path.basename(case_dir)}.json")
-    if not os.path.exists(json_file):
-        raise FileNotFoundError(f"Configuration file not found: {json_file}")
+    case_name = os.path.basename(case_dir)
 
-    with open(json_file, 'r') as f:
+    # Find all files containing the directory name
+    matching_files: List[str] = []
+    for file in os.listdir(case_dir):
+        if case_name in file and file.endswith('.json'):
+            matching_files.append(file)
+
+    if not matching_files:
+        raise FileNotFoundError(f"No configuration files found in {case_dir} containing '{case_name}'")
+
+    # Display numbered list of files
+    print(f"\nFound {len(matching_files)} configuration file(s) in '{case_name}':")
+    for i, file in enumerate(matching_files, 1):
+        print(f"{i}. {file}")
+
+    # Request user selection
+    while True:
+        try:
+            choice = input(f"\nSelect file number to load (1-{len(matching_files)}): ").strip()
+            file_index = int(choice) - 1
+
+            if 0 <= file_index < len(matching_files):
+                selected_file = matching_files[file_index]
+                break
+            else:
+                print(f"Invalid number. Please enter a number between 1 and {len(matching_files)}")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+
+    # Load selected file
+    json_file = os.path.join(case_dir, selected_file)
+    with open(json_file, 'r', encoding='utf-8') as f:
         config = json.load(f)
 
     logger.info(f"Loaded configuration from {json_file}")
@@ -42,28 +71,10 @@ def generate_mesh_for_frequency(
     This replaces the MATLAB-based mesh generation with our Python version.
     """
     # Import here to avoid dependency if not needed
-    from input_param_2mesh import SimpleMeshGenerator
+    from input2mesh.input_param_2mesh import SimpleMeshGenerator
 
-    # Temporarily create a mesh generator instance
-    mesh_gen = SimpleMeshGenerator.__new__(SimpleMeshGenerator)
-    mesh_gen.config = config
-    mesh_gen.frequency_khz = frequency_khz
-    mesh_gen.hmax = mesh_gen.calculate_wavelength_based_hmax(frequency_khz)
-    mesh_gen.has_additional_domain = (
-            config['Model'].get('AddDomainLoc') == 'ext' and
-            config['Model'].get('AddDomainType', 'none').lower() not in ['none', 'same']
-    )
-    mesh_gen.domain_rx = config['Model']['DomainRx']
-    mesh_gen.domain_ry = config['Model']['DomainRy']
-    mesh_gen.domain_theta = config['Model']['DomainTheta']
-    mesh_gen.domain_ecc = config['Model']['DomainEcc']
-    mesh_gen.domain_ecc_angle = config['Model']['DomainEccAngle']
-    mesh_gen.domain_nth = config['Model']['DomainNth']
-    mesh_gen.add_domain_L = config['Model'].get('AddDomainL', 1.0)
-    mesh_gen.add_domain_type = config['Model'].get('AddDomainType', 'abc')
-    mesh_gen.ext_boundary_shape = config['Mesh'].get('ext_boundary_shape', 'cir')
-
-    mesh_gen.gmsh_initialized = False
+    # CORRECT USAGE: Pass config dict and frequency directly to __init__
+    mesh_gen = SimpleMeshGenerator(config, frequency_khz)
 
     try:
         mesh_gen.generate_mesh()
@@ -254,7 +265,7 @@ def main():
     # case_dir = 'Mesaverde-HTI-F'
     # case_dir = 'Mesaverde-HTI-F1'
     # case_dir = 'Mesaverde-HTI-F2'
-    case_dir = 'Bakken-B'
+    case_dir = 'BakkenB'
     # case_dir = 'Bakken-HTI'
     # case_dir = 'Bakken-HTI-F'
     # case_dir = 'Cotton-30'

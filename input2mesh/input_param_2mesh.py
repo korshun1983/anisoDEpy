@@ -1,4 +1,4 @@
-# simple_mesh_test_ide.py
+# input_param_2mesh.py
 import json
 import gmsh
 import math
@@ -19,13 +19,71 @@ OUTPUT_FILE = None
 
 
 class SimpleMeshGenerator:
-    def __init__(self, config_file):
-        self.config_file = config_file
-        self.config = self.load_config()
-        self.frequency_khz = None
-        self.process_parameters()
+    def __init__(self, config_source, frequency_khz=None):
+        """
+        Initialize mesh generator from either a file path (str) or config dict.
+        If config_source is a dict, frequency_khz must be provided (batch mode).
+        If config_source is a string (file path), frequency_khz is ignored (interactive mode).
+        """
+        # Initialize essential attributes first
         self.gmsh_initialized = False
         self.mesh_data = {}
+        self.frequency_khz = None
+
+        if isinstance(config_source, dict):
+            # Batch mode: initialize from config dict
+            self.config = config_source
+            if frequency_khz is None:
+                raise ValueError("frequency_khz must be provided when using config dict")
+            self.initialize_from_config(frequency_khz)
+        else:
+            # Interactive mode: initialize from file
+            self.config_file = config_source
+            self.config = self.load_config()
+            self.process_parameters()
+
+    def initialize_from_config(self, frequency_khz):
+        """Initialize all parameters from config dict without user interaction"""
+        model = self.config.get('Model', {})
+
+        # Set frequency
+        self.frequency_khz = frequency_khz
+
+        # Extract model parameters with defaults
+        self.domain_rx = model.get('DomainRx', [0.1, 2.0])
+        self.domain_ry = model.get('DomainRy', [0.1, 2.0])
+        self.domain_theta = model.get('DomainTheta', [0, 0])
+        self.domain_ecc = model.get('DomainEcc', [0, 0])
+        self.domain_ecc_angle = model.get('DomainEccAngle', [0, 0])
+        self.domain_nth = model.get('DomainNth', [12, 12])  # WAS MISSING IN ORIGINAL
+        self.domain_types = model.get('DomainType', ['fluid', 'HTTI'])
+        self.num_domains = len(self.domain_types)
+
+        # Additional domain parameters
+        self.add_domain_loc = model.get('AddDomainLoc', 'ext')
+        self.add_domain_type = model.get('AddDomainType', 'abc')
+        self.add_domain_L = model.get('AddDomainL', 1.0)
+        self.has_additional_domain = (
+                self.add_domain_loc == 'ext' and
+                self.add_domain_type.lower() not in ['none', 'same']
+        )
+
+        # Mesh parameters
+        mesh_params = self.config.get('Mesh', {})
+        self.ext_boundary_shape = mesh_params.get('ext_boundary_shape', 'cir')
+
+        # Calculate wavelength-based mesh size
+        self.hmax = self.calculate_wavelength_based_hmax(frequency_khz)
+        self.dhmax = 0.3
+
+        # Log initialization
+        print(f"\nModel parameters for {self.frequency_khz} kHz:")
+        print(f"  • Domains: {self.num_domains} ({', '.join(self.domain_types)})")
+        print(f"  • Radii Rx: {self.domain_rx}")
+        print(f"  • Radii Ry: {self.domain_ry}")
+        print(f"  • Domain Nth: {self.domain_nth}")
+        print(f"  • Additional domain: {'Yes' if self.has_additional_domain else 'No'} ({self.add_domain_type})")
+        print(f"  • Mesh size: hmax={self.hmax:.6f}, dhmax={self.dhmax}")
 
     def load_config(self):
         with open(self.config_file, 'r') as f:
@@ -117,6 +175,7 @@ class SimpleMeshGenerator:
         return hmax
 
     def process_parameters(self):
+        """Process parameters with user interaction (for standalone use)"""
         model = self.config.get('Model', {})
 
         self.frequency_khz = self.get_frequency_from_user()
@@ -126,14 +185,17 @@ class SimpleMeshGenerator:
         self.domain_theta = model.get('DomainTheta', [0, 0])
         self.domain_ecc = model.get('DomainEcc', [0, 0])
         self.domain_ecc_angle = model.get('DomainEccAngle', [0, 0])
+        self.domain_nth = model.get('DomainNth', [12, 12])
         self.domain_types = model.get('DomainType', ['fluid', 'HTTI'])
         self.num_domains = len(self.domain_types)
 
         self.add_domain_loc = model.get('AddDomainLoc', 'ext')
         self.add_domain_type = model.get('AddDomainType', 'abc')
         self.add_domain_L = model.get('AddDomainL', 1.0)
-        self.has_additional_domain = (self.add_domain_loc == 'ext' and
-                                      self.add_domain_type.lower() not in ['none', 'same'])
+        self.has_additional_domain = (
+                self.add_domain_loc == 'ext' and
+                self.add_domain_type.lower() not in ['none', 'same']
+        )
 
         mesh_params = self.config.get('Mesh', {})
 
@@ -586,7 +648,7 @@ def main():
             print(f"ERROR: File '{CONFIG_FILE}' not found!")
             return
 
-        mesh_generator = SimpleMeshGenerator(CONFIG_FILE)
+        mesh_generator = SimpleMeshGenerator(CONFIG_FILE)  # Interactive mode
 
         success = mesh_generator.generate_mesh()
         if not success:
