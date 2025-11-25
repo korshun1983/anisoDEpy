@@ -1,10 +1,15 @@
+#!/usr/bin/env python3
+# ------------------------------------------------------------------
+#  anisoDEpy  –  dispersion curves for cylindrically layered
+#               anisotropic wave-guides (SAFE, Tri6, Python).
+# ------------------------------------------------------------------
 import sys
 from pathlib import Path
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog
 
-# add local packages
+# allow local imports when running from any folder
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from geometry_builder import load_model, build_cylindrical
@@ -13,7 +18,7 @@ from post_processor import plot_slowness
 
 
 def pick_json_file() -> Path:
-    """Open file-dialog starting inside the local models/ folder."""
+    """Open file-dialog starting inside local models/ folder."""
     root = tk.Tk()
     root.withdraw()
     root.update()
@@ -39,7 +44,7 @@ def main():
     f_arr = model['Model']['f_array']
     out   = []
     for f in f_arr:
-        omega = 2 * np.pi * f * 1e3
+        omega = 2 * np.pi * f * 1e3          # rad/s
         K, M, dof = build_global_matrices(mesh, model, omega)
         w, v      = solve_safe(K, M, nev=50, sigma=omega * 1.1)
         out.append((f, w, v))

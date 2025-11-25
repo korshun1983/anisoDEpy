@@ -105,7 +105,8 @@ def build_global_matrices(mesh, model, omega):
             C = np.diag([lam, lam, 0.0, 0.0, 0.0, 0.0])
         else:  # HTTI
             par = m['DomainParam'][layer]
-            rho, c11, c13, c33, c44, c66, theta = par[0], *par[1:7]
+            rho = par[0]
+            c11, c13, c33, c44, c66, theta = par[1:7]
             C = np.array([
                 [c11, c13, 0.0, 0.0, 0.0, 0.0],
                 [c13, c33, 0.0, 0.0, 0.0, 0.0],
@@ -122,7 +123,7 @@ def build_global_matrices(mesh, model, omega):
             dr = r_ctr - rx[-2]
             L  = rx[-1] - rx[-2]
             s  = 1.0 + 1j * m['PML_factor'] * (dr / L) ** m['PML_degree']
-        C = C / s
+        C = C.astype(complex) / s
 
         # ---- elementary matrices ----
         Ke, Me = elem_mat(xyz, C, rho, omega)
