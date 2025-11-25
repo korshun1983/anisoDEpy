@@ -1,5 +1,5 @@
-numpy
 scipy
 meshio
-matplotlib
-gmsh
+matplotlib>=3.5.0
+numpy>=1.21.0
+gmsh>=4.8.0
