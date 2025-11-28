@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from geometry_builder import load_model, build_cylindrical_for_frequency
 from field_solver import build_global_matrices, solve_safe
 from post_processor import plot_slowness
+# NEW: stage-2 processor (analogue of proc_aniso_TE.m)
+from anisodepy.processor import TEProcessor
 
 
 def pick_json_file() -> Path:
@@ -261,14 +263,27 @@ def main():
                 print("Calculation cancelled.")
                 return
 
-        # Solve for this frequency
+        # Solve SAFE for current frequency
         omega = 2 * np.pi * f * 1e3  # rad/s
         K, M, dof = build_global_matrices(mesh, model, omega)
-        w, v = solve_safe(K, M, nev=50, sigma=omega * 1.1)
-        out.append((f, w, v))
+        w, v = solve_safe(K, M, nev=10, sigma=omega * 1.1)
 
-    plot_slowness(out, model)
+        # Stage-2 post-processing (analogue of proc_aniso_TE.m)
+        processor = TEProcessor(nodes=mesh.coord,
+                               eigen_vals=w,
+                               eigen_vecs=v)
+        proc_results = processor.run(r_lim=(0.05, 1.5), nr=60, nphi=128,
+                                    mode=0, r_idx=15)
+
+        # Collect everything for final stage-3 interpreter
+        out.append({"freq": f, "omega": omega,
+                   "eig_val": w, "eig_vec": v,
+                   "proc": proc_results})
+
+    # Stage-3 plotting (still uses old function – will be replaced by interpreter.py)
+    plot_slowness([(item["freq"], item["eig_val"], item["eig_vec"]) for item in out],
+                 model)
 
 
 if __name__ == "__main__":
-    main()y
+    main()

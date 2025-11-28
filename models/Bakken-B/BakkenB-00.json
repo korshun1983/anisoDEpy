@@ -16,7 +16,7 @@
     "f_array_range": {
       "start": 1.0,
       "step": 3.0,
-      "end": 10.0
+      "end": 13.0
     },
     "DomainParam": [
       [1.0, 2.25],
@@ -24,7 +24,7 @@
     ]
   },
   "Advanced": {
-    "num_eig_max": 50,
+    "num_eig_max": 10,
     "EigSearchStart": 1.0
   },
   "Mesh": {
