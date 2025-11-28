@@ -1,22 +1,17 @@
-from scipy.sparse.linalg import eigsh
+from scipy.sparse.linalg import eigs
 import numpy as np
 
 
-def solve_safe(K, M, nev, sigma=1.0):
+def solve_safe(K, M, nev=10, sigma=None):
     """
-    Solve quadratic eigen-value problem  (K - ω²M) v = 0
-    by shift-and-invert:  (K - σM)⁻¹ M v = θ v,  θ = 1/(ω² - σ)
-    Returns ω (real, rad/s) and eigen-vectors v.
+    Complex SAFE eigen-solver (replaces real eigsh).
+    K, M - sparse matrices (may be complex).
+    nev  - number of modes.
+    sigma - complex shift (rad/s), default omega*1.1j.
     """
-    A = K - sigma * M
+    if sigma is None:
+        sigma = 1.0j * 1.1          # small imaginary shift if not given
 
-    # θ = 1/(ω² - σ)  →  largest-magnitude θ gives ω closest to σ
-    theta, v = eigsh(A, M=M, k=nev, sigma=sigma, which='LM')
-
-    # ω² = σ + 1/θ
-    omega2 = sigma + 1.0 / theta
-    # ensure non-negative (round-off guard)
-    omega2 = np.maximum(omega2, 0.0)
-    omega = np.sqrt(omega2)
-
-    return omega, v
+    w, v = eigs(A=K, M=M, k=nev, sigma=sigma, which='LM')
+    # w - complex eigen-values (rad/s), v - eigen-vectors
+    return w, v
