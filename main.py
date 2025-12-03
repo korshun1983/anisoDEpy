@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog
+import time
 
 # allow local imports when running from any folder
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -145,7 +146,21 @@ def main():
         # ---- solve SAFE ----
         omega = 2 * np.pi * f_khz * 1e3
         K, M, active_dof = build_global_matrices(mesh, model, omega)
-        w, v = solve_safe(K, M, nev=10, sigma=omega * (1 + 0.1j))
+
+        # ---- DEBUG: ----
+        print(f'  Before solver: K shape {K.shape}, nnz {K.nnz}, dtype {K.dtype}')
+        print(f'  omega = {omega:.3f} rad/s, sigma = {omega * (1 + 0.1j)}')
+
+        t0 = time.time()
+        try:
+            w, v = solve_safe(K, M, nev=5, sigma=omega * (1 + 0.1j), which='LR')
+            print(f'  Solver OK: {w.size} modes')
+        except Exception as e:
+            import traceback
+            print('\n[ERROR] Solver failed:')
+            traceback.print_exc()
+            print(f'  Solver time: {time.time() - t0:.2f} s')
+            sys.exit(1)
 
         nev = w.size  # actual number of modes
         active_dof = np.unique(np.clip(active_dof - 1, 0, mesh.coord.shape[0] - 1))
@@ -194,14 +209,15 @@ def main():
         except Exception as e:
             print("Raw dispersion plot failed:", e)
 
-    # stage-3 interpretation
-    dummy_mask = np.zeros(mesh.coord.shape[0], dtype=bool)
-    interpreter = TEInterpreter(results_for_interp,
-                                nodes=mesh.coord,
-                                pml_mask=dummy_mask,
-                                adj_mask=dummy_mask)
-    summary = interpreter.run(out_dir=out_dir)
-    print("\nStage-3 interpretation complete – figures saved to", out_dir.resolve())
+    else:
+        # stage-3 interpretation
+        dummy_mask = np.zeros(mesh.coord.shape[0], dtype=bool)
+        interpreter = TEInterpreter(results_for_interp,
+                                    nodes=mesh.coord,
+                                    pml_mask=dummy_mask,
+                                    adj_mask=dummy_mask)
+        summary = interpreter.run(out_dir=out_dir)
+        print("\nStage-3 interpretation complete – figures saved to", out_dir.resolve())
 
 
 if __name__ == "__main__":

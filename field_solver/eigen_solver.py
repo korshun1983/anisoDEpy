@@ -1,17 +1,23 @@
+# eigen_solver.py
 from scipy.sparse.linalg import eigs
 import numpy as np
+import time
 
 
-def solve_safe(K, M, nev=10, sigma=None):
+def solve_safe(K, M, nev=10, sigma=None, which='LR'):
     """
-    Complex SAFE eigen-solver (replaces real eigsh).
+    Complex SAFE eigen-solver with timing.
     K, M - sparse matrices (may be complex).
     nev  - number of modes.
     sigma - complex shift (rad/s), default omega*1.1j.
+    which - 'LR' or 'LM' (LR is faster for large problems).
     """
     if sigma is None:
-        sigma = 1.0j * 1.1          # small imaginary shift if not given
+        sigma = 1.0j * 1.1
 
-    w, v = eigs(A=K, M=M, k=nev, sigma=sigma, which='LM')
-    # w - complex eigen-values (rad/s), v - eigen-vectors
+    t0 = time.time()
+    print('  Starting eigs...', end=' ')
+    w, v = eigs(A=K, M=M, k=nev, sigma=sigma, which=which)
+    print(f'done in {time.time() - t0:.2f}s')
+
     return w, v
