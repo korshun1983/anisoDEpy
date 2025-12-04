@@ -153,8 +153,11 @@ def main():
 
         t0 = time.time()
         try:
-            w, v = solve_safe(K, M, nev=5, sigma=omega * (1 + 0.1j), which='LR')
+            w, v = solve_safe(K, M, nev=10 , sigma=omega * (1 + 0.1j), which='LR')
             print(f'  Solver OK: {w.size} modes')
+            print(f'  eigen_values (rad/s): {w}')
+            print(f'  slowness (s/km):      {1.0 / w * 1e3}')
+
         except Exception as e:
             import traceback
             print('\n[ERROR] Solver failed:')
