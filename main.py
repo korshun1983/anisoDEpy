@@ -202,10 +202,11 @@ def main():
             slow_all = np.array(slow_all) * 1e3  # s/km
 
             plt.figure(figsize=(7, 5))
-            plt.scatter(freq_hz_all / 1e3, slow_all, s=8, c='k', marker='o')
+            plt.scatter(freq_hz_all / 1e3, slow_all*1e3, s=8, c='k', marker='o')
             plt.xlabel("Frequency (kHz)")
-            plt.ylabel("Slowness (s/km)")
-            plt.title("Raw dispersion – all calculated modes (dots)")
+            plt.ylabel(r"Slowness ($\mu$s/m)")
+            plt.xticks(np.arange(min(freq_hz_all / 1e3),max(freq_hz_all / 1e3),0.25))
+            plt.title("Raw dispersion – all calculated modes (dots). Python")
             plt.grid(alpha=0.3)
             plt.tight_layout()
             plt.show()
