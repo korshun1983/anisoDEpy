@@ -149,11 +149,11 @@ def main():
 
         # ---- DEBUG: ----
         print(f'  Before solver: K shape {K.shape}, nnz {K.nnz}, dtype {K.dtype}')
-        print(f'  omega = {omega:.3f} rad/s, sigma = {omega * (1 + 0.1j)}')
+        print(f'  omega = {omega:.3f} rad/s, sigma = {omega * (1 + 0.5j)}')
 
         t0 = time.time()
         try:
-            w, v = solve_safe(K, M, nev=10 , sigma=omega * (1 + 0.1j), which='LR')
+            w, v = solve_safe(K, M, nev=10 , sigma=omega * (1 + 0.5j), which='LR')
             print(f'  Solver OK: {w.size} modes')
             print(f'  eigen_values (rad/s): {w}')
             print(f'  slowness (s/km):      {1.0 / w * 1e3}')
@@ -183,6 +183,22 @@ def main():
         results_for_interp.append(res)
         freq_list.append(f_khz)
 
+    freq_hz_all = []
+    slow_all = []
+    for f_khz, res in zip(freq_list, results_for_interp):
+        f_hz = f_khz * 1e3  # Hz
+        slow = (1.0 / res["eig_val"]) * 1e6  # μs/m (nev значений)
+        # повторяем ту же частоту для каждого собственного значения
+        freq_hz_all.extend([f_hz] * slow.size)
+        slow_all.extend(slow)
+
+    raw_data = {
+        'freq_Hz': np.array(freq_hz_all),
+        'slowness_μsm': np.array(slow_all),
+    }
+    out_dir = Path("output")
+    np.savez(out_dir / 'raw_data.npz', **raw_data)
+
     # ------------------------------------------------------------------
     # OPTIONAL: raw dispersion dots (all modes, no filtering)
     # ------------------------------------------------------------------
@@ -193,35 +209,36 @@ def main():
 
             freq_hz_all, slow_all = [], []
             for f_khz, res in zip(freq_list, results_for_interp):
-                f_hz = f_khz * 1e3  # kHz -> Hz
-                slow = 1.0 / res["eig_val"]  # (nev,)  s/m
+                f_hz = f_khz * 1e3                      # Hz
+
+                slow = (1.0 / res["eig_val"]) * 1e6     # μs/m
+
                 freq_hz_all.extend([f_hz] * slow.size)
                 slow_all.extend(slow)
 
             freq_hz_all = np.array(freq_hz_all)
-            slow_all = np.array(slow_all) * 1e3  # s/km
+            slow_all = np.array(slow_all)
 
             plt.figure(figsize=(7, 5))
-            plt.scatter(freq_hz_all / 1e3, slow_all*1e3, s=8, c='k', marker='o')
-            plt.xlabel("Frequency (kHz)")
-            plt.ylabel(r"Slowness ($\mu$s/m)")
-            plt.xticks(np.arange(min(freq_hz_all / 1e3),max(freq_hz_all / 1e3),0.25))
-            plt.title("Raw dispersion – all calculated modes (dots). Python")
+            plt.scatter(freq_hz_all / 1e3, slow_all, s=8, c='k', marker='o')
+            plt.xlabel('Frequency, kHz')
+            plt.ylabel('Slowness, μs/m')
+            plt.title('Raw dispersion – all calculated modes (dots). Python')
             plt.grid(alpha=0.3)
             plt.tight_layout()
             plt.show()
         except Exception as e:
             print("Raw dispersion plot failed:", e)
-
-    else:
-        # stage-3 interpretation
-        dummy_mask = np.zeros(mesh.coord.shape[0], dtype=bool)
-        interpreter = TEInterpreter(results_for_interp,
-                                    nodes=mesh.coord,
-                                    pml_mask=dummy_mask,
-                                    adj_mask=dummy_mask)
-        summary = interpreter.run(out_dir=out_dir)
-        print("\nStage-3 interpretation complete – figures saved to", out_dir.resolve())
+    #
+    # else:
+    #     # stage-3 interpretation
+    #     dummy_mask = np.zeros(mesh.coord.shape[0], dtype=bool)
+    #     interpreter = TEInterpreter(results_for_interp,
+    #                                 nodes=mesh.coord,
+    #                                 pml_mask=dummy_mask,
+    #                                 adj_mask=dummy_mask)
+    #     summary = interpreter.run(out_dir=out_dir)
+    #     print("\nStage-3 interpretation complete – figures saved to", out_dir.resolve())
 
 
 if __name__ == "__main__":
