@@ -1,5 +1,7 @@
 """
-anisoDEpy – dispersion solver for cylindrically layered
-anisotropic waveguides (SAFE, Tri6, Python).
+SAFE (Spectral Analysis of Finite Elements) for Anisotropic Media
+Python Implementation
 """
-version = "rev1"
+
+__version__ = "2.0.0"
+__author__ = "ARAMCO"

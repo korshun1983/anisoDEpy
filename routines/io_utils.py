@@ -140,3 +140,27 @@ def move_results_to_model_dir(output_dir: Path, model_dir: Path, pattern: str = 
         logger.info(f"Moved {moved} files to {model_dir}")
 
     return moved
+
+def finalize_results(root_path: Path, model_dir_name: str) -> None:
+    """
+    Moves computed results from output/ to model directory.
+    """
+    output_dir = root_path / "output"
+    target_dir = root_path / "models" / model_dir_name
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    moved_files = []
+    for mat_file in output_dir.glob("*.mat"):
+        try:
+            shutil.move(str(mat_file), str(target_dir / mat_file.name))
+            moved_files.append(mat_file.name)
+        except Exception as e:
+            logging.error(f"Failed to move {mat_file.name}: {e}")
+
+    if moved_files:
+        logging.info(f"Moved {len(moved_files)} files to models/{model_dir_name}/")
+        for f in moved_files[:3]:  # Show first 3
+            logging.debug(f"  - {f}")
+        if len(moved_files) > 3:
+            logging.debug(f"  ... and {len(moved_files) - 3} more")

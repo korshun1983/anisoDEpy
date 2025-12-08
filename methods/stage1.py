@@ -41,6 +41,9 @@ def st1_2_prepare_model_methods(InputParam: InputParam) -> InputParam:
     InputParam.Methods['rot_matrix'] = matrix_assembly.rotation_matrix
     InputParam.Methods['V_phase_VTI_exact_RPH'] = asymptotes.v_phase_vti_exact_rph
     InputParam.Methods['MeshFaces'] = meshgen.mesh_faces
+    InputParam.Methods['em_tensor_VTI'] = matrix_assembly.em_tensor_vti
+    InputParam.Methods['rot_c_ij'] = matrix_assembly.rotate_c_ij
+    InputParam.Methods['rot_matrix'] = matrix_assembly.rot_matrix
 
     # Problem-specific method branching
     if InputParam.Config.ProblemType == 'spectrum':

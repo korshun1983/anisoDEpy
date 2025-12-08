@@ -6,9 +6,10 @@
     "DomainEcc": [0, 0],
     "DomainEccAngle": [0, 0],
     "DomainType": ["fluid", "HTTI"],
+    "BCType": ["rigid", "free"],
     "LDomain_in_LSH": "yes",
     "AddDomainLoc": "ext",
-    "AddDomainType": "abc",
+    "AddDomainType": "none",
     "AddDomainL": 1.0,
     "PML_factor": 10,
     "PML_degree": 2.0,
@@ -19,15 +20,18 @@
       "end": 15.0
     },
     "DomainParam": [
-      [1.0, 2.25],
-      [2.23, 40.9, 8.5, 26.9, 10.5, 15.3, 0, 0]
-    ]
+      [1000.0, 2.25e9],
+      [2600.0, 40.9e9, 8.5e9, 26.9e9, 10.5e9, 15.3e9, 0, 0]
+    ],
+    "DomainNth": [12, 12]
   },
   "Advanced": {
     "num_eig_max": 10,
     "EigSearchStart": 1.0
   },
   "Mesh": {
-    "output": "yes"
+    "output": "yes",
+    "hmax": 0.1,
+    "ext_boundary_shape": "cir"
   }
 }
