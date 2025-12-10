@@ -2,7 +2,13 @@
 """
 ===============================================================================
 Mesh Generation for SAFE Method using pygmsh + gmsh
-Generates high-order triangular meshes for cylindrical domains
+Generates high-order triangular meshes for cylindrical domains with
+SPECIAL HANDLING for solid central cylinder
+===============================================================================
+Критические исправления:
+1. Правильная обработка центрального сплошного цилиндра (fluid)
+2. Исправлен вызов gmsh API
+3. Удалена старая визуализация (перенесена в gen_aniso.py)
 ===============================================================================
 """
 
@@ -17,26 +23,16 @@ logger = logging.getLogger(__name__)
 
 
 def prepare_mesh(CompStruct: Any) -> Dict[str, Any]:
-    """
-    Main mesh generation routine using pygmsh.
-    Replicates PrepareMesh_sp_SAFE.m with high-order element support.
-
-    Returns:
-        Dict containing MeshNodes, BoundaryEdges, MeshTri, MeshProps
-    """
     logger.info("        Generating 2D mesh with pygmsh...")
 
-    # Check boundary shape preference
-    boundary_shape = CompStruct.Mesh.get('ext_boundary_shape', 'cir').lower()
+    boundary_shape = getattr(CompStruct.Mesh, 'ext_boundary_shape', 'cir').lower()
     if boundary_shape not in ['cir', 'rect']:
         logger.warning(f"Invalid boundary shape '{boundary_shape}', defaulting to 'cir'")
         boundary_shape = 'cir'
 
-    # Generate mesh using gmsh
     mesh_data = generate_gmsh_mesh(CompStruct, boundary_shape)
 
-    # Convert to cubic (3rd order) elements if required
-    if CompStruct.Advanced['N_nodes'] == 10:
+    if CompStruct.Advanced.N_nodes == 10:
         logger.info("          Converting to cubic elements...")
         mesh_data = convert_to_cubic_elements(mesh_data)
 
@@ -49,159 +45,189 @@ def prepare_mesh(CompStruct: Any) -> Dict[str, Any]:
 def generate_gmsh_mesh(CompStruct: Any, boundary_shape: str) -> Dict[str, Any]:
     """
     Generate 2D mesh using gmsh with physical group labeling for domains.
-
-    Args:
-        CompStruct: Computation structure with domain parameters
-        boundary_shape: 'cir' (circular) or 'rect' (rectangular) outer boundary
-
-    Returns:
-        Dict with mesh data
     """
-    # Initialize gmsh
     gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 0)  # Suppress output
+    gmsh.option.setNumber("General.Terminal", 0)
 
     model = gmsh.model()
     model.add("safe_waveguide")
 
-    # Extract domain parameters
     domain_rx = np.array(CompStruct.Model['DomainRx'])
     domain_ry = np.array(CompStruct.Model['DomainRy'])
     n_layers = len(domain_rx) - 1
 
-    # Create geometry
-    factory = model.occ  # OpenCASCADE kernel for robust geometry
+    logger.info(f"      Creating {n_layers} domains from {len(domain_rx)} radii")
+    logger.info(f"      Radii: {domain_rx}")
 
-    # Define boundaries for each layer
+    factory = model.occ
+
     boundary_tags = []
+    boundary_dimtags = []
 
-    for i in range(n_layers + 1):
+    # Центральный цилиндр
+    if domain_rx[0] > 0.0:
+        if boundary_shape == 'cir':
+            tag = factory.addDisk(0, 0, 0, domain_rx[0], domain_ry[0])
+            boundary_dimtags.append((2, tag))
+        else:
+            tag = factory.addRectangle(-domain_rx[0] / 2, -domain_ry[0] / 2, 0, domain_rx[0], domain_ry[0])
+            boundary_dimtags.append((2, tag))
+        boundary_tags.append(tag)
+        logger.info(f"      Central solid cylinder: r={domain_rx[0]}")
+    else:
+        boundary_tags.append(None)
+        boundary_dimtags.append(None)
+        logger.info("      Central point (no geometry)")
+
+    # Внешние границы
+    for i in range(1, n_layers + 1):
         rx = domain_rx[i]
         ry = domain_ry[i]
 
-        if i == 0:  # Inner borehole (if radius > 0)
-            if rx > 0 and ry > 0:
-                if boundary_shape == 'cir':
-                    tag = factory.addDisk(0, 0, 0, rx, ry)
-                else:
-                    tag = factory.addRectangle(-rx / 2, -ry / 2, 0, rx, ry)
-                boundary_tags.append(tag)
-            else:
-                # Point or line at center - treat specially
-                boundary_tags.append(None)
+        if boundary_shape == 'cir':
+            tag = factory.addDisk(0, 0, 0, rx, ry)
+            boundary_dimtags.append((2, tag))
         else:
-            if boundary_shape == 'cir':
-                tag = factory.addDisk(0, 0, 0, rx, ry)
-            else:
-                tag = factory.addRectangle(-rx / 2, -ry / 2, 0, rx, ry)
-            boundary_tags.append(tag)
+            tag = factory.addRectangle(-rx / 2, -ry / 2, 0, rx, ry)
+            boundary_dimtags.append((2, tag))
+        boundary_tags.append(tag)
+        logger.info(f"      Outer boundary {i}: r={rx}")
 
-    # Create domains by boolean difference
-    domain_tags = []
-
-    for i in range(n_layers):
-        if boundary_tags[i] is None:
-            # First domain is just the first layer
-            domain_tag = boundary_tags[i + 1]
-        else:
-            # Subtract inner from outer
-            outer_tag = boundary_tags[i + 1]
-            inner_tag = boundary_tags[i]
-            domain_dim_tags, _ = factory.cut(
-                [(2, outer_tag)], [(2, inner_tag)], removeObject=True, removeTool=False
-            )
-            domain_tag = domain_dim_tags[0][1]
-
-        domain_tags.append(domain_tag)
-
-        # Assign physical group for domain (will be used as element marker)
-        model.addPhysicalGroup(2, [domain_tag], tag=i + 1)
-
-    # Add outer boundary physical group
-    outer_boundary_tag = factory.getBoundary([(2, domain_tags[-1])], oriented=False)
-    if outer_boundary_tag:
-        model.addPhysicalGroup(1, [tag[1] for tag in outer_boundary_tag], tag=n_layers + 1)
-
-    # Synchronize geometry
     factory.synchronize()
 
-    # Set meshing algorithm
-    gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal Delaunay
+    domain_tags = []
+    domain_dimtags = []
 
-    # Set element order
-    if CompStruct.Advanced['N_nodes'] == 10:
-        gmsh.option.setNumber("Mesh.ElementOrder", 3)  # 3rd order (cubic)
-    elif CompStruct.Advanced['N_nodes'] == 6:
-        gmsh.option.setNumber("Mesh.ElementOrder", 2)  # 2nd order (quadratic)
+    for i in range(n_layers):
+        if i == 0 and domain_rx[0] > 0.0:
+            domain_tag = boundary_tags[1]
+            domain_dimtags.append(boundary_dimtags[1])
+            logger.info(f"      Domain 1 (solid): using boundary tag {domain_tag}")
+        else:
+            outer_dimtag = boundary_dimtags[i + 1]
+            inner_dimtag = boundary_dimtags[i]
+
+            if inner_dimtag is None:
+                domain_dimtags.append(outer_dimtag)
+                domain_tag = boundary_tags[i + 1]
+            else:
+                domain_dim_tags, _ = factory.cut(
+                    [outer_dimtag], [inner_dimtag], removeObject=True, removeTool=False
+                )
+                if len(domain_dim_tags) > 0:
+                    domain_dimtags.append(domain_dim_tags[0])
+                    domain_tag = domain_dim_tags[0][1]
+                else:
+                    logger.error(f"Failed to create domain {i + 1}")
+                    continue
+
+        domain_tags.append(domain_tag)
+        model.addPhysicalGroup(2, [domain_tag], tag=i + 1)
+        logger.info(f"      Domain {i + 1} physical group created")
+
+    # Внешняя граница для ABC/PML
+    try:
+        if domain_dimtags:
+            last_domain_dimtag = domain_dimtags[-1]
+            outer_boundary_dimtags = model.getBoundary([last_domain_dimtag], oriented=False)
+
+            if outer_boundary_dimtags:
+                edge_tags = [dimtag[1] for dimtag in outer_boundary_dimtags]
+                model.addPhysicalGroup(1, edge_tags, tag=n_layers + 1)
+                logger.info(f"      Outer boundary physical group created")
+    except Exception as e:
+        logger.warning(f"Could not create outer boundary physical group: {e}")
+
+    factory.synchronize()
+
+    physical_groups = gmsh.model.getPhysicalGroups()
+    domain_groups = [pg for pg in physical_groups if pg[0] == 2]
+    logger.info(f"      Created {len(domain_groups)} domain physical groups")
+
+    gmsh.option.setNumber("Mesh.Algorithm", 6)
+
+    if CompStruct.Advanced.N_nodes == 10:
+        gmsh.option.setNumber("Mesh.ElementOrder", 3)
+    elif CompStruct.Advanced.N_nodes == 6:
+        gmsh.option.setNumber("Mesh.ElementOrder", 2)
     else:
-        gmsh.option.setNumber("Mesh.ElementOrder", 1)  # Linear
+        gmsh.option.setNumber("Mesh.ElementOrder", 1)
 
-    # Set mesh size from hmax parameter
-    hmax = CompStruct.Mesh['hmax']
+    hmax = CompStruct.Mesh.hmax
     if isinstance(hmax, list):
-        hmax = hmax[0]  # Use first layer value
+        hmax = hmax[0]
 
     gmsh.option.setNumber("Mesh.CharacteristicLengthMin", hmax / 2)
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", hmax)
 
-    # Generate mesh
+    logger.info("      Generating mesh...")
     model.mesh.generate(2)
 
-    # Extract nodes
     node_tags, node_coords, _ = model.mesh.getNodes()
-    MeshNodes = node_coords.reshape(-1, 3).T[:2, :]  # Only x,y coordinates
+    MeshNodes = node_coords.reshape(-1, 3).T[:2, :]
 
-    # Extract triangles
     element_types, element_tags, node_tags_list = model.mesh.getElements()
 
-    # Find triangular elements (type 2 = 3-node, type 9 = 6-node, type 21 = 10-node)
-    tri_mask = np.isin(element_types, [2, 9, 21])
-    if not np.any(tri_mask):
-        raise RuntimeError("No triangular elements found in mesh")
+    tri_types = [2, 9, 21]
+    tri_indices = [i for i, etype in enumerate(element_types) if etype in tri_types]
 
-    # Get triangle nodes
-    tri_node_tags = node_tags_list[tri_mask][0]
+    if not tri_indices:
+        raise RuntimeError("No triangular elements found")
 
-    # Reshape based on element order
-    n_nodes_per_tri = len(tri_node_tags) // len(element_tags[tri_mask][0])
-    triangles = tri_node_tags.reshape(-1, n_nodes_per_tri).T
+    tri_idx = tri_indices[0]
+    tri_node_tags = node_tags_list[tri_idx]
+    tri_elements = element_tags[tri_idx]
 
-    # Adjust to 0-based indexing
-    triangles = triangles - 1
+    n_nodes_per_tri = len(tri_node_tags) // len(tri_elements)
+    triangles = tri_node_tags.reshape(-1, n_nodes_per_tri).T - 1
 
-    # Get domain markers (physical groups)
+    logger.info("      Assigning domain markers based on geometry...")
     domain_markers = np.zeros(triangles.shape[1], dtype=int)
 
-    for domain_id in range(1, n_layers + 1):
-        elem_dim_tags = model.mesh.getElementsForPhysicalGroup(2, domain_id)
-        if len(elem_dim_tags) > 0:
-            elem_indices = elem_dim_tags[1] - 1  # 0-based
-            elem_indices = elem_indices[elem_indices < len(domain_markers)]
-            domain_markers[elem_indices] = domain_id
+    tri_nodes = triangles[:3, :].astype(int)
+    centers = np.mean(MeshNodes[:, tri_nodes], axis=1)
+    radii = np.sqrt(centers[0, :] ** 2 + centers[1, :] ** 2)
 
-    # Append domain markers as 4th row
-    MeshTri = np.vstack([triangles[:3, :], domain_markers])
+    for i in range(n_layers):
+        r_inner = domain_rx[i]
+        r_outer = domain_rx[i + 1]
 
-    # Extract boundary edges
+        if i == 0 and r_inner == 0.0:
+            mask = radii <= r_outer
+        else:
+            mask = (radii > r_inner) & (radii <= r_outer)
+
+        domain_markers[mask] = i + 1
+        logger.info(f"        Domain {i + 1}: {np.sum(mask)} elements (r={r_inner:.4f} to {r_outer:.4f})")
+
+    unique_markers = np.unique(domain_markers)
+    logger.info(f"      Assigned domain markers: {unique_markers}")
+
+    MeshTri = np.vstack([triangles, domain_markers.reshape(1, -1)])
+    logger.info(f"      Final MeshTri shape: {MeshTri.shape}")
+    logger.info(f"      Domain distribution: {np.bincount(domain_markers)}")
+
     boundary_edges = []
-    for dim in [1]:  # 1D elements (edges)
-        edge_dim_tags = model.mesh.getElementsForPhysicalGroup(1, n_layers + 1)
-        if len(edge_dim_tags) > 1:
-            edge_node_tags = edge_dim_tags[2][0]
+    try:
+        edge_types, edge_tags, edge_node_tags = gmsh.model.getElementsForPhysicalGroup(1, n_layers + 1)
+        if len(edge_tags) > 0:
+            edge_node_tags = edge_node_tags[0]
             edge_nodes = edge_node_tags.reshape(-1, 2).T - 1
             n_edges = edge_nodes.shape[1]
             boundary_tag = np.ones(n_edges, dtype=int) * (n_layers + 1)
             boundary_edges.append(np.vstack([edge_nodes, boundary_tag]))
+            logger.info(f"      Extracted {n_edges} boundary edges")
+    except Exception as e:
+        logger.warning(f"Could not get boundary edges: {e}")
 
     if boundary_edges:
         BoundaryEdges = np.hstack(boundary_edges)
     else:
         BoundaryEdges = np.empty((3, 0), dtype=int)
+        logger.warning("No boundary edges found")
 
-    # Clean up
     gmsh.finalize()
 
-    # Create MeshProps placeholder
     MeshProps = create_mesh_props(MeshNodes, MeshTri, CompStruct)
 
     return {
@@ -214,13 +240,9 @@ def generate_gmsh_mesh(CompStruct: Any, boundary_shape: str) -> Dict[str, Any]:
 
 def create_mesh_props(MeshNodes: np.ndarray, MeshTri: np.ndarray,
                       CompStruct: Any) -> Dict[str, np.ndarray]:
-    """
-    Compute mesh properties needed for matrix assembly:
-    shape function coefficients, element areas, etc.
-    """
+    """Compute mesh properties needed for matrix assembly"""
     n_tri = MeshTri.shape[1]
 
-    # Triangle areas using shoelace formula
     areas = np.zeros(n_tri)
     a_coeff = np.zeros((6, n_tri))
     b_coeff = np.zeros((6, n_tri))
@@ -232,18 +254,12 @@ def create_mesh_props(MeshNodes: np.ndarray, MeshTri: np.ndarray,
         p2 = MeshNodes[:, nodes[1]]
         p3 = MeshNodes[:, nodes[2]]
 
-        # Area
         area = 0.5 * abs(
             p1[0] * (p2[1] - p3[1]) +
             p2[0] * (p3[1] - p1[1]) +
             p3[0] * (p1[1] - p2[1])
         )
         areas[i] = max(area, 1e-12)
-
-        # Shape function coefficients for linear elements
-        # a_i = x_j*y_k - x_k*y_j
-        # b_i = y_j - y_k
-        # c_i = x_k - x_j
 
         a_coeff[0, i] = p2[0] * p3[1] - p3[0] * p2[1]
         a_coeff[1, i] = p3[0] * p1[1] - p1[0] * p3[1]
@@ -257,36 +273,39 @@ def create_mesh_props(MeshNodes: np.ndarray, MeshTri: np.ndarray,
         c_coeff[1, i] = p1[0] - p3[0]
         c_coeff[2, i] = p2[0] - p1[0]
 
-    # For cubic elements, expand coefficients (placeholder for full cubic)
-    if CompStruct.Advanced['N_nodes'] == 10:
-        # Expand to 6 per node (for 3 variables)
+    if CompStruct.Advanced.N_nodes == 10:
         a_coeff = np.vstack([a_coeff, np.zeros((3, n_tri))])
         b_coeff = np.vstack([b_coeff, np.zeros((3, n_tri))])
         c_coeff = np.vstack([c_coeff, np.zeros((3, n_tri))])
 
+    dxL = np.zeros((6, n_tri))
+    dyL = np.zeros((6, n_tri))
+
+    for i in range(n_tri):
+        area = areas[i]
+        if area > 1e-12:
+            dxL[:3, i] = b_coeff[:3, i] / (2 * area)
+            dyL[:3, i] = c_coeff[:3, i] / (2 * area)
+
     return {
-        'DS': np.ones((6, n_tri)),  # Will be refined for cubic
+        'DS': np.ones((6, n_tri)),
         'delta': np.ones((6, n_tri)),
         'a': a_coeff,
         'b': b_coeff,
         'c': c_coeff,
-        'area': areas
+        'area': areas,
+        'dxL': dxL,
+        'dyL': dyL
     }
 
 
 def convert_to_cubic_elements(mesh_data: Dict) -> Dict:
-    """
-    Convert gmsh's quadratic/cubic elements to the format expected by SAFE.
-    If gmsh already generated cubic elements, just reformat.
-    """
+    """Convert gmsh's quadratic/cubic elements to SAFE format"""
     MeshTri = mesh_data['MeshTri']
 
-    # Check if we already have enough nodes
     if MeshTri.shape[0] >= 10:
-        logger.info("          gmsh already generated cubic elements")
+        logger.info("          gmsh generated cubic elements correctly")
         return mesh_data
 
-    # If not, we need to add nodes (simplified version)
-    logger.warning("          Manual cubic conversion may be needed")
-
+    logger.warning("          Manual cubic conversion needed (gmsh order mismatch)")
     return mesh_data

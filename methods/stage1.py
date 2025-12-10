@@ -6,50 +6,43 @@ Replicates MATLAB St1_SetModel.m orchestration logic
 ===============================================================================
 """
 
+import logging
+import json
 from pathlib import Path
 from typing import Dict, Callable
 from core.config import InputParam, MethodsContainer
 from methods import stage2, stage3, stage4
-from routines import meshgen, matrix_assembly, asymptotes
+from routines import meshgen, matrix_assembly
+from routines.asymptotes import compute_asymptotes_safe, v_phase_vti_exact_rph
 
+logger = logging.getLogger(__name__)
 
-# -----------------------------------------------------------------------------
-# Sub-stage implementations
-# -----------------------------------------------------------------------------
 
 def st1_1_set_model_config() -> InputParam:
-    """
-    Replicates St1_1_SetModelConfig.m
-    Initializes default configuration parameters.
-    """
-    return InputParam()  # Already has all defaults from dataclass
+    """Replicates St1_1_SetModelConfig.m"""
+    return InputParam()
 
 
 def st1_2_prepare_model_methods(InputParam: InputParam) -> InputParam:
-    """
-    Replicates St1_2_PrepareModelMethods.m
-    Assigns function handles based on configuration.
-    """
-    # Set root path (project directory)
+    """Replicates St1_2_PrepareModelMethods.m"""
     root_path = Path(__file__).parent.parent
     InputParam.Config.root_path = root_path
 
-    # Assign utility methods (always available)
-    InputParam.Methods['chebdif'] = None  # Will be implemented when needed
-    InputParam.Methods['em_tensor_VTI'] = matrix_assembly.em_tensor_vti
-    InputParam.Methods['rot_c_ij'] = matrix_assembly.rotate_c_ij
-    InputParam.Methods['rot_matrix'] = matrix_assembly.rotation_matrix
-    InputParam.Methods['V_phase_VTI_exact_RPH'] = asymptotes.v_phase_vti_exact_rph
-    InputParam.Methods['MeshFaces'] = meshgen.mesh_faces
+    # Assign utility methods
+    InputParam.Methods['chebdif'] = None
     InputParam.Methods['em_tensor_VTI'] = matrix_assembly.em_tensor_vti
     InputParam.Methods['rot_c_ij'] = matrix_assembly.rotate_c_ij
     InputParam.Methods['rot_matrix'] = matrix_assembly.rot_matrix
+    InputParam.Methods['V_phase_VTI_exact_RPH'] = v_phase_vti_exact_rph
+
+    # ИСПРАВЛЕНИЕ: используем правильное имя функции из meshgen.py
+    InputParam.Methods['MeshFaces'] = meshgen.prepare_mesh
 
     # Problem-specific method branching
     if InputParam.Config.ProblemType == 'spectrum':
         if InputParam.Config.NumMethod == 'SAFE':
             # Asymptotes for SAFE method
-            InputParam.Methods['ComputeAsymptotes'] = asymptotes.compute_asymptotes_safe
+            InputParam.Methods['ComputeAsymptotes'] = compute_asymptotes_safe
 
             # Stage 2 methods
             InputParam.Methods['St2_PrepareModel'] = stage2.prepare_model
@@ -57,12 +50,12 @@ def st1_2_prepare_model_methods(InputParam: InputParam) -> InputParam:
             InputParam.Methods['St2_2_PrepareModelMethods'] = stage2.prepare_model_methods
 
             # Stage 3 methods
-            InputParam.Methods['St3_PrepareBasicMatrices'] = stage3.prepare_basic_matrices
+            InputParam.Methods['St3_PrepareBasicMatrices'] = stage3.run_stage3_matrix_assembly
 
             # Stage 4 methods
             InputParam.Methods['St4_ComputeSolution'] = stage4.compute_solution
 
-            # Set solver path (for debugging/info only)
+            # Set solver path
             solver_path = root_path / 'methods' / 'spectrum'
             InputParam.Config.solver_path = solver_path
 
@@ -80,13 +73,22 @@ def st1_3_set_model_user(InputParam: InputParam, json_file: Path) -> InputParam:
     with open(json_file, 'r', encoding='utf-8') as f:
         json_data = json.load(f)
 
-    # Merge with existing InputParam
-    InputParam = create_input_from_json(json_data)
+    # Create new InputParam from JSON
+    InputParam_from_json = create_input_from_json(json_data)
+
+    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: копируем только данные, сохраняя Methods
+    InputParam.Model = InputParam_from_json.Model
+    InputParam.Config = InputParam_from_json.Config
+    InputParam.Mesh = InputParam_from_json.Mesh
+    InputParam.Advanced = InputParam_from_json.Advanced
+    InputParam.Misc = InputParam_from_json.Misc
+    InputParam.Data = InputParam_from_json.Data
+    InputParam.Asymp = InputParam_from_json.Asymp
+
     InputParam._json_file = json_file
 
-    # Post-processing (replicates MATLAB logic)
+    # Post-processing
     if 'f_array' not in InputParam.Model:
-        # Generate frequency array from range if needed
         far = InputParam.Model['f_array_range']
         InputParam.Model['f_array'] = np.arange(
             far['start'], far['end'] + far['step'] / 2, far['step']
@@ -94,14 +96,21 @@ def st1_3_set_model_user(InputParam: InputParam, json_file: Path) -> InputParam:
 
     InputParam.Model['N_disp'] = len(InputParam.Model['f_array'])
 
+    # === ДОБАВЛЕНИЕ: Set AddDomain_Exist immediately after loading model ===
+    InputParam.Model['AddDomainType'] = InputParam.Model.get('AddDomainType', 'none').lower()
+    if InputParam.Model['AddDomainType'] == 'abc+pml':
+        InputParam.Model['AddDomainType'] = 'pml+abc'
+
+    if InputParam.Model['AddDomainType'] != 'none':
+        InputParam.Model['AddDomain_Exist'] = 'yes'
+    else:
+        InputParam.Model['AddDomain_Exist'] = 'no'
+
     return InputParam
 
 
 def st1_4_set_model_advanced(InputParam: InputParam) -> InputParam:
-    """
-    Replicates St1_4_SetModelAdvanced_sp_SAFE.m
-    Sets advanced parameters that should not be modified by typical users.
-    """
+    """Replicates St1_4_SetModelAdvanced_sp_SAFE.m"""
     # Mesh visualization flag
     InputParam.Advanced.VisualizeMesh = True
 
@@ -113,7 +122,7 @@ def st1_4_set_model_advanced(InputParam: InputParam) -> InputParam:
     InputParam.Advanced.EigsOptions.disp = 0
     InputParam.Advanced.EigsOptions.tol = 1e-8
 
-    # Source parameters (for excitation classification)
+    # Source parameters
     InputParam.Advanced.Source.xc = 0.0
     InputParam.Advanced.Source.yc = 0.0
     InputParam.Advanced.Source.r0x = 0.06
@@ -127,37 +136,33 @@ def st1_4_set_model_advanced(InputParam: InputParam) -> InputParam:
     return InputParam
 
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # Main orchestrator
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 def initialize_model(json_file: Path) -> InputParam:
-    """
-    Main Stage 1 orchestrator - replicates St1_SetModel.m
-    Executes the full initialization pipeline in correct order.
-    """
-    logger = logging.getLogger(__name__)
+    """Main Stage 1 orchestrator - replicates St1_SetModel.m"""
     logger.info("Stage 1: Initializing model parameters...")
 
     # Step 1.1: Configuration defaults
     InputParam = st1_1_set_model_config()
-    logger.info("  ✓ Configuration defaults set")
+    logger.info("  [OK] Configuration defaults set")
 
     # Step 1.2: Method mapping
     InputParam = st1_2_prepare_model_methods(InputParam)
-    logger.info("  ✓ Methods assigned")
+    logger.info("  [OK] Methods assigned")
 
     # Step 1.3: User parameters (from JSON)
     InputParam = st1_3_set_model_user(InputParam, json_file)
-    logger.info(f"  ✓ User parameters loaded from {json_file.name}")
+    logger.info(f"  [OK] User parameters loaded from {json_file.name}")
 
     # Step 1.4: Advanced parameters
     InputParam = st1_4_set_model_advanced(InputParam)
-    logger.info("  ✓ Advanced parameters set")
+    logger.info("  [OK] Advanced parameters set")
 
     # Validation
     validate_input_param(InputParam)
-    logger.info("  ✓ Parameter validation passed")
+    logger.info("  [OK] Parameter validation passed")
 
     return InputParam
 
@@ -165,24 +170,52 @@ def initialize_model(json_file: Path) -> InputParam:
 def validate_input_param(InputParam: InputParam) -> None:
     """
     Validate parameter consistency.
-    Replicates MATLAB's implicit validation checks.
     """
-    # Check domain array lengths
-    n_layers = len(InputParam.Model['DomainRx'])
-    required_keys = ['DomainRy', 'DomainTheta', 'DomainEcc', 'DomainEccAngle', 'DomainType']
-    for key in required_keys:
-        if len(InputParam.Model[key]) != n_layers:
-            raise ValueError(f"Domain array length mismatch: {key}")
+    logger.debug("  Validating InputParam...")
 
-    # Check PML/ABC consistency
-    if InputParam.Model['AddDomainType'].lower() != 'none':
-        if InputParam.Model['AddDomainLoc'].lower() not in ['ext', 'int']:
-            raise ValueError("AddDomainLoc must be 'ext' or 'int'")
+    # === ПРОВЕРКА МАССИВОВ ГРАНИЦ ===
+    n_boundaries = len(InputParam.Model['DomainRx'])
+    n_domains = len(InputParam.Model['DomainType'])
 
-    # Check frequency array
+    # DomainRx должен быть на 1 больше, чем DomainType
+    if n_boundaries != n_domains + 1:
+        raise ValueError(
+            f"DomainRx length ({n_boundaries}) should be DomainType length + 1 ({n_domains + 1})"
+        )
+
+    # Массивы ГРАНИЦ должны совпадать с n_boundaries
+    boundary_arrays = ['DomainRy', 'DomainTheta', 'DomainEcc', 'DomainEccAngle']
+    for key in boundary_arrays:
+        actual_len = len(InputParam.Model[key])
+        if actual_len != n_boundaries:
+            raise ValueError(
+                f"Domain array length mismatch: {key} (expected {n_boundaries}, got {actual_len})"
+            )
+
+    # === КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: DomainNth относится к ДОМЕНАМ ===
+    if 'DomainNth' in InputParam.Model and len(InputParam.Model['DomainNth']) != n_domains:
+        raise ValueError(
+            f"DomainNth length ({len(InputParam.Model['DomainNth'])}) should match DomainType ({n_domains})"
+        )
+    # ============================================================================
+
+    # === ПРОВЕРКА МАССИВОВ ДОМЕНОВ ===
+    if len(InputParam.Model['DomainParam']) != n_domains:
+        raise ValueError(
+            f"DomainParam length ({len(InputParam.Model['DomainParam'])}) should be {n_domains}"
+        )
+
+    # === ПРОВЕРКА BCType ===
+    expected_bc_length = n_domains + 1  # Всегда на 1 больше, чем доменов
+    if len(InputParam.Model['BCType']) != expected_bc_length:
+        raise ValueError(
+            f"BCType length ({len(InputParam.Model['BCType'])}) should be n_domains + 1 ({expected_bc_length})"
+        )
+
+    # Остальные проверки...
     if len(InputParam.Model['f_array']) == 0:
         raise ValueError("Frequency array is empty")
 
-    # Check BCType length (should be n_layers + 1)
-    if len(InputParam.Model['BCType']) != n_layers + 1:
-        raise ValueError("BCType length should be n_layers + 1")
+    if InputParam.Model['AddDomainType'].lower() != 'none':
+        if InputParam.Model['AddDomainLoc'].lower() not in ['ext', 'int']:
+            raise ValueError("AddDomainLoc must be 'ext' or 'int'")

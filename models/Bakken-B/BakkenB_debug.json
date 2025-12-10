@@ -1,22 +1,16 @@
 {
   "Model": {
-    "DomainRx": [0, 0.1, 2.0],
-    "DomainRy": [0, 0.1, 2.0],
+    "DomainRx": [0.1, 0.5, 2.0],
+    "DomainRy": [0.1, 0.5, 2.0],
     "DomainTheta": [0, 0, 0],
     "DomainEcc": [0, 0, 0],
     "DomainEccAngle": [0, 0, 0],
     "DomainType": ["fluid", "HTTI"],
-    "BCType": ["fluid", "SSstiff", "rigid"],
+    "BCType": ["SSstiff", "rigid", "rigid"],
     "LDomain_in_LSH": "yes",
     "AddDomainLoc": "ext",
-    "AddDomainType": "pml",
+    "AddDomainType": "none",
     "AddDomainL": 1.0,
-    "PML_factor": 10,
-    "PML_degree": 2.0,
-    "PML_method": 1.0,
-    "ABC_factor": 0.1,
-    "ABC_degree": 1.0,
-    "ABC_account_r": "yes",
     "f_array_range": {
       "start": 1.0,
       "step": 1.0,
@@ -26,7 +20,7 @@
       [1000.0, 2.25e9],
       [2600.0, 40.9e9, 8.5e9, 26.9e9, 10.5e9, 15.3e9, 0, 0]
     ],
-    "DomainNth": [12, 12]
+    "DomainNth": [12, 12, 12]
   },
   "Advanced": {
     "num_eig_max": 10,
@@ -36,6 +30,5 @@
     "output": "yes",
     "hmax": 0.1,
     "ext_boundary_shape": "cir"
-  },
-  "viz_mode": "3"
+  }
 }

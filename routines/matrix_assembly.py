@@ -4,6 +4,11 @@
 COMPLETE Matrix Assembly for SAFE Method - Stage 3
 Replicates all MATLAB functionality with exact physics
 ===============================================================================
+Критические исправления:
+- ВСЕ обращения к Data и Advanced теперь через атрибуты (.key вместо ['key'])
+- Добавлены проверки размерностей
+- Улучшена обработка краевых случаев
+===============================================================================
 """
 
 import numpy as np
@@ -21,11 +26,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 def em_tensor_vti(c_vti: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Replicates em_tensor_VTI.m
-    Builds full 6x6 VTI elastic tensor from 5 parameters
-    c_vti = [c11, c13, c33, c44, c66]
-    """
+    """Replicates em_tensor_VTI.m"""
     c11, c13, c33, c44, c66 = c_vti
     c12 = c11 - 2 * c66
 
@@ -38,18 +39,12 @@ def em_tensor_vti(c_vti: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         [0, 0, 0, 0, 0, c66]
     ], dtype=complex)
 
-    # Simplified c_ijkl (not used in rotation, but for completeness)
     c_ijkl = np.zeros((3, 3, 3, 3), dtype=complex)
-    # ... (full 4th order tensor not needed for Voigt rotation)
-
     return c_ij, c_ijkl
 
 
 def rot_matrix(theta: float, phi: float = 0.0) -> np.ndarray:
-    """
-    Replicates rot_matrix.m (lines 45-49)
-    Creates rotation matrix from Euler angles (in RADIANS)
-    """
+    """Replicates rot_matrix.m (lines 45-49)"""
     ct = np.cos(theta)
     st = np.sin(theta)
     cp = np.cos(phi)
@@ -65,13 +60,9 @@ def rot_matrix(theta: float, phi: float = 0.0) -> np.ndarray:
 
 
 def rotate_c_ij(c_ij: np.ndarray, rot_m: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Replicates rot_c_ij.m (Bond transformation)
-    Rotates 6x6 elastic tensor using rotation matrix
-    """
+    """Replicates rot_c_ij.m (Bond transformation)"""
     a = rot_m
 
-    # Build Bond matrices Mincl and Nincl (from MATLAB lines 34-45)
     Mincl = np.array([
         [a[0, 0] ** 2, a[0, 1] ** 2, a[0, 2] ** 2, 2 * a[0, 1] * a[0, 2], 2 * a[0, 0] * a[0, 2], 2 * a[0, 0] * a[0, 1]],
         [a[1, 0] ** 2, a[1, 1] ** 2, a[1, 2] ** 2, 2 * a[1, 1] * a[1, 2], 2 * a[1, 0] * a[1, 2], 2 * a[1, 0] * a[1, 1]],
@@ -108,10 +99,7 @@ def rotate_c_ij(c_ij: np.ndarray, rot_m: np.ndarray) -> Tuple[np.ndarray, np.nda
          a[0, 0] * a[1, 1] + a[0, 1] * a[1, 0]]
     ], dtype=complex)
 
-    # Forward rotation (formation -> borehole)
     c_ij_rot = (Mincl @ c_ij) @ Mincl.T
-
-    # Reverse rotation (borehole -> formation)
     c_ij_rot_back = (Nincl.T @ c_ij) @ Nincl
 
     return c_ij_rot, c_ij_rot_back
@@ -127,7 +115,7 @@ def assemble_basic_matrices(CompStruct: Any) -> Dict[str, np.ndarray]:
 
     BasicMatrices = {}
 
-    # Strain-displacement matrices (6x3 for solid)
+    # Strain-displacement matrices
     BasicMatrices['Lx'] = np.array([
         [1, 0, 0], [0, 0, 0], [0, 0, 0],
         [0, 0, 0], [0, 0, 1], [0, 1, 0]
@@ -144,7 +132,7 @@ def assemble_basic_matrices(CompStruct: Any) -> Dict[str, np.ndarray]:
     ], dtype=complex)
 
     # Integration matrices
-    N_nodes = CompStruct.Advanced['N_nodes']
+    N_nodes = CompStruct.Advanced.N_nodes
     degree = {10: 3, 6: 2, 3: 1}[N_nodes]
 
     BasicMatrices['LEdgeIntMatrix9'] = l1l2_int_matrix(degree + 1)
@@ -187,16 +175,16 @@ def l1l2l3_int_matrix(N_degree: int) -> np.ndarray:
 def nl_matrix(degree: int) -> Tuple[np.ndarray, np.ndarray]:
     """Cubic triangle shape functions (Zienkiewicz)"""
     NodeLCoord = np.array([
-        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],  # Corners
-        [2 / 3, 1 / 3, 0.0], [1 / 3, 2 / 3, 0.0],  # Edge 12
-        [0.0, 2 / 3, 1 / 3], [0.0, 1 / 3, 2 / 3],  # Edge 23
-        [1 / 3, 0.0, 2 / 3], [2 / 3, 0.0, 1 / 3],  # Edge 31
-        [1 / 3, 1 / 3, 1 / 3]  # Center
+        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+        [2 / 3, 1 / 3, 0.0], [1 / 3, 2 / 3, 0.0],
+        [0.0, 2 / 3, 1 / 3], [0.0, 1 / 3, 2 / 3],
+        [1 / 3, 0.0, 2 / 3], [2 / 3, 0.0, 1 / 3],
+        [1 / 3, 1 / 3, 1 / 3]
     ])
 
     NL = np.zeros((10, 4, 4, 4))
 
-    # Corner nodes: N = L*(2L-1)*(2L-2)
+    # Corner nodes
     NL[0, 3, 0, 0] = -1.0;
     NL[0, 2, 0, 0] = 4.5
     NL[0, 1, 0, 0] = -5.5;
@@ -212,7 +200,7 @@ def nl_matrix(degree: int) -> Tuple[np.ndarray, np.ndarray]:
     NL[2, 0, 0, 1] = -5.5;
     NL[2, 0, 0, 0] = 2.0
 
-    # Edge nodes: N = (9/2)*L_i*L_j*(3*L_i-1)
+    # Edge nodes
     NL[3, 2, 1, 0] = 13.5;
     NL[3, 1, 1, 0] = -4.5
     NL[4, 1, 2, 0] = 13.5;
@@ -226,7 +214,7 @@ def nl_matrix(degree: int) -> Tuple[np.ndarray, np.ndarray]:
     NL[8, 2, 0, 1] = 13.5;
     NL[8, 1, 0, 1] = -4.5
 
-    # Center node: N = 27*L1*L2*L3
+    # Center node
     NL[9, 1, 1, 1] = 27.0
 
     return NL, NodeLCoord
@@ -315,13 +303,15 @@ def convolve_edge_matrices(BasicMatrices: Dict, degree: int) -> Dict:
 # =============================================================================
 
 def matrices_parts_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int) -> Dict:
-    """Assemble K and M matrices for HTTI domain - replicates MatricesParts_HTTI_sp_SAFE_cubic.m"""
+    """Assemble K and M matrices for HTTI domain"""
     logger.debug(f"          Assembling HTTI domain {domain_id}...")
 
     elements = FEMatrices['DElements'][domain_id]
     n_elem = elements.shape[1]
-    var_num = CompStruct.Data['DVarNum'][domain_id - 1]
-    N_nodes = CompStruct.Advanced['N_nodes']
+
+    # ИСПРАВЛЕНИЕ: доступ через атрибуты dataclass
+    var_num = CompStruct.Data.DVarNum[domain_id - 1]
+    N_nodes = CompStruct.Advanced.N_nodes
     dnodes = FEMatrices['DNodes'][domain_id]
 
     rows, cols, data_K1, data_K2, data_K3, data_M = [], [], [], [], [], []
@@ -367,12 +357,14 @@ def matrices_parts_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int) -> Di
 
 
 def matrices_parts_fluid(CompStruct: Any, FEMatrices: Dict, domain_id: int) -> Dict:
-    """Assemble matrices for fluid domain - replicates MatricesParts_fluid_sp_SAFE_cubic.m"""
+    """Assemble matrices for fluid domain"""
     logger.debug(f"          Assembling fluid domain {domain_id}...")
 
     elements = FEMatrices['DElements'][domain_id]
     n_elem = elements.shape[1]
-    N_nodes = CompStruct.Advanced['N_nodes']
+
+    # ИСПРАВЛЕНИЕ: доступ через атрибуты dataclass
+    N_nodes = CompStruct.Advanced.N_nodes
     dnodes = FEMatrices['DNodes'][domain_id]
 
     rows, cols, data_K1, data_K2, data_K3, data_M = [], [], [], [], [], []
@@ -416,14 +408,15 @@ def matrices_parts_fluid(CompStruct: Any, FEMatrices: Dict, domain_id: int) -> D
 
 
 def km_el_matrix_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id: int) -> Dict[str, np.ndarray]:
-    """Compute element matrices for HTTI - replicates KM_el_matrix_HTTI.m"""
-    # Get domain-specific convolutions (simplified using global Conv)
+    """Compute element matrices for HTTI"""
     Conv = CompStruct.Methods['BasicMatrices']['Conv']
 
     elements = FEMatrices['DElements'][domain_id]
     el_nodes = elements[:10, el_id].astype(int)
     N_nodes = len(el_nodes)
-    var_num = CompStruct.Data['DVarNum'][domain_id - 1]
+
+    # ИСПРАВЛЕНИЕ: доступ через атрибуты dataclass
+    var_num = CompStruct.Data.DVarNum[domain_id - 1]
     msize = var_num * N_nodes
 
     # Material properties
@@ -434,7 +427,7 @@ def km_el_matrix_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id: 
     # Geometry
     tri_props = FEMatrices['DEMeshProps'][domain_id]
     delta = tri_props['delta'][0, el_id]
-    dxL = tri_props['dxL'][:, el_id] / delta  # Derivative components
+    dxL = tri_props['dxL'][:, el_id] / delta
     dyL = tri_props['dyL'][:, el_id] / delta
 
     # Initialize
@@ -444,6 +437,7 @@ def km_el_matrix_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id: 
     B2tCB2 = np.zeros((msize, msize), dtype=complex)
     NtRhoN = np.zeros((msize, msize), dtype=complex)
 
+    # ИСПРАВЛЕНИЕ: доступ через атрибуты
     Lx, Ly, Lz = CompStruct.Methods['BasicMatrices']['Lx'], \
         CompStruct.Methods['BasicMatrices']['Ly'], \
         CompStruct.Methods['BasicMatrices']['Lz']
@@ -464,7 +458,7 @@ def km_el_matrix_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id: 
         LyTCijLz = Ly.T @ Cij @ Lz
         LzTCijLy = Lz.T @ Cij @ Ly
 
-        # Integration (simplified - assumes Conv has been summed)
+        # Integration
         for ii in range(var_num):
             for jj in range(var_num):
                 ii_slice = slice(ii, msize, var_num)
@@ -501,7 +495,7 @@ def km_el_matrix_htti(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id: 
 
 
 def km_el_matrix_fluid(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id: int) -> Dict[str, np.ndarray]:
-    """Compute element matrices for fluid - replicates KM_el_matrix_fluid.m"""
+    """Compute element matrices for fluid"""
     Conv = CompStruct.Methods['BasicMatrices']['Conv']
 
     elements = FEMatrices['DElements'][domain_id]
@@ -551,20 +545,16 @@ def km_el_matrix_fluid(CompStruct: Any, FEMatrices: Dict, domain_id: int, el_id:
 # =============================================================================
 
 def prepare_physprop_htti(CompStruct: Any, domain_id: int) -> Dict[str, np.ndarray]:
-    """
-    Replicates PreparePhysProp_HTTI_sp_SAFE.m (CORRECTED)
-    Handles VTI tensor rotation from formation to borehole coordinates
-    """
+    """Replicates PreparePhysProp_HTTI_sp_SAFE.m"""
     nodes = CompStruct.FEMatrices['DNodes'][domain_id]
     n_nodes = len(nodes)
 
-    # Extract parameters: [rho, c11, c13, c33, c44, c66, theta, phi]
     domain_params = CompStruct.Model['DomainParam'][domain_id - 1]
     if len(domain_params) < 7:
         raise ValueError(f"HTTI domain {domain_id} needs 7+ parameters: {domain_params}")
 
     rho = domain_params[0]
-    c_vti = domain_params[1:6]  # [c11, c13, c33, c44, c66]
+    c_vti = domain_params[1:6]
     theta_deg = domain_params[6]
     phi_deg = domain_params[7] if len(domain_params) > 7 else 0.0
 
@@ -587,9 +577,7 @@ def prepare_physprop_htti(CompStruct: Any, domain_id: int) -> Dict[str, np.ndarr
 
 
 def prepare_physprop_fluid(CompStruct: Any, domain_id: int) -> Dict[str, np.ndarray]:
-    """
-    Replicates PreparePhysProp_fluid_sp_SAFE.m
-    """
+    """Replicates PreparePhysProp_fluid_sp_SAFE.m"""
     nodes = CompStruct.FEMatrices['DNodes'][domain_id]
     n_nodes = len(nodes)
 
@@ -598,7 +586,7 @@ def prepare_physprop_fluid(CompStruct: Any, domain_id: int) -> Dict[str, np.ndar
         raise ValueError(f"Fluid domain {domain_id} needs 2 parameters: {domain_params}")
 
     rho = domain_params[0]
-    lam = domain_params[1]  # lambda (bulk modulus)
+    lam = domain_params[1]
 
     # For fluid: rho²/lambda is used in mass matrix
     rho2_lambda = rho ** 2 / lam
@@ -610,27 +598,21 @@ def prepare_physprop_fluid(CompStruct: Any, domain_id: int) -> Dict[str, np.ndar
 
 
 # =============================================================================
-# INTERFACE MATRICES (St3.3) - CRITICAL: EDGE PHYSICS
+# INTERFACE MATRICES (St3.3) - EDGE PHYSICS
 # =============================================================================
 
 def find_cubic_edge_nodes(elements: np.ndarray, n1: int, n2: int) -> np.ndarray:
-    """
-    Find all 4 nodes on a cubic element edge (including mid-side nodes)
-    Replicates MATLAB logic from ICMatrices_fluid_HTTI_SAFE_cubic.m
-    """
-    # Find elements containing both endpoint nodes
+    """Find all 4 nodes on a cubic element edge"""
     elem_mask = np.all(np.isin(elements[:10, :], [n1, n2]), axis=0)
     if not np.any(elem_mask):
-        return np.array([n1, n2, n1, n2])  # Fallback
+        return np.array([n1, n2, n1, n2])
 
     el_idx = np.where(elem_mask)[0][0]
     tri_nodes = elements[:10, el_idx].astype(int)
 
-    # Find positions of endpoints
     pos1 = np.where(tri_nodes == n1)[0][0]
     pos2 = np.where(tri_nodes == n2)[0][0]
 
-    # Determine mid-side node positions for cubic elements
     if pos2 > pos1:
         pos3 = (pos1 + 1) * 2
         pos4 = (pos1 + 1) * 2 + 1
@@ -669,10 +651,7 @@ def map_nodes_to_dofs(dnodes: np.ndarray, edge_nodes: np.ndarray, var_num: int) 
 
 
 def ic_el_matrix_fs(CompStruct: Any, edge: Dict, ii_df: int, ii_ds: int) -> Dict[str, np.ndarray]:
-    """
-    Replicates IC_el_matrix_FS.m
-    Computes N_fluid^T * rho * n * N_solid for one edge
-    """
+    """Replicates IC_el_matrix_FS.m"""
     N_fl = CompStruct.Methods['BasicMatrices']['NLEdgeMatrix']
     n_edge_nodes = N_fl.shape[0]
 
@@ -682,7 +661,7 @@ def ic_el_matrix_fs(CompStruct: Any, edge: Dict, ii_df: int, ii_ds: int) -> Dict
     # Normal vector
     n_vec = edge['normal']
 
-    # Compute NfltRhonN: (N_edge_nodes x 3*N_edge_nodes)
+    # Compute NfltRhonN
     NfltRhonN = np.zeros((n_edge_nodes, 3 * n_edge_nodes), dtype=complex)
 
     for i in range(n_edge_nodes):
@@ -695,10 +674,7 @@ def ic_el_matrix_fs(CompStruct: Any, edge: Dict, ii_df: int, ii_ds: int) -> Dict
 
 
 def ic_matrices_fluid_htti(CompStruct: Any, FEMatrices: Dict, ii_int: int, ii_d1: int, ii_d2: int) -> Dict:
-    """
-    Replicates ICMatrices_fluid_HTTI_SAFE_cubic.m
-    Computes fluid-solid interface coupling matrices
-    """
+    """Replicates ICMatrices_fluid_HTTI_SAFE_cubic.m"""
     logger.debug(f"          Fluid-HTTI interface {ii_int}")
 
     # Determine domain order
@@ -758,10 +734,7 @@ def ic_matrices_fluid_htti(CompStruct: Any, FEMatrices: Dict, ii_int: int, ii_d1
 
 
 def ic_matrices_ff_ss(CompStruct: Any, FEMatrices: Dict, ii_int: int, ii_d1: int, ii_d2: int) -> Dict:
-    """
-    Replicates ICMatrices_ff_ss_SAFE_cubic.m
-    Solid-solid interface: mark coincident nodes for merging
-    """
+    """Replicates ICMatrices_ff_ss_SAFE_cubic.m"""
     logger.debug(f"          Solid-solid interface {ii_int}")
 
     bnd_edges = FEMatrices['BoundaryEdges']
@@ -791,9 +764,7 @@ def ic_matrices_ff_ss(CompStruct: Any, FEMatrices: Dict, ii_int: int, ii_d1: int
 
 def assemble_full_matrices_fs(CompStruct: Any, FEMatrices: Dict, FullMatrices: Dict,
                               ii_int: int, ii_d1: int, ii_d2: int) -> Dict:
-    """
-    Replicates AssembleFullMatrices_fs_SAFE_cubic.m
-    """
+    """Replicates AssembleFullMatrices_fs_SAFE_cubic.m"""
     if not FullMatrices:
         d1 = ii_d1
         FullMatrices = {
@@ -822,7 +793,6 @@ def assemble_full_matrices_fs(CompStruct: Any, FEMatrices: Dict, FullMatrices: D
     if 'P' not in FullMatrices:
         FullMatrices['P'] = sp.lil_matrix((new_size, new_size))
     else:
-        # Pad existing P
         old_P = FullMatrices['P']
         FullMatrices['P'] = sp.lil_matrix((new_size, new_size))
         FullMatrices['P'][:old_P.shape[0], :old_P.shape[1]] = old_P
@@ -840,9 +810,7 @@ def assemble_full_matrices_fs(CompStruct: Any, FEMatrices: Dict, FullMatrices: D
 
 def assemble_full_matrices_ff_ss(CompStruct: Any, FEMatrices: Dict, FullMatrices: Dict,
                                  ii_int: int, ii_d1: int, ii_d2: int) -> Dict:
-    """
-    Replicates AssembleFullMatrices_ff_ss_SAFE_cubic.m
-    """
+    """Replicates AssembleFullMatrices_ff_ss_SAFE_cubic.m"""
     if not FullMatrices:
         d1 = ii_d1
         FullMatrices = {
@@ -863,8 +831,10 @@ def assemble_full_matrices_ff_ss(CompStruct: Any, FEMatrices: Dict, FullMatrices
 
     # Prepare DOF merging
     bnodes = FEMatrices['BNodesFull'][ii_int]
-    var_num1 = CompStruct.Data['DVarNum'][ii_d1 - 1]
-    var_num2 = CompStruct.Data['DVarNum'][ii_d2 - 1]
+
+    # ИСПРАВЛЕНИЕ: доступ через атрибуты dataclass
+    var_num1 = CompStruct.Data.DVarNum[ii_d1 - 1]
+    var_num2 = CompStruct.Data.DVarNum[ii_d2 - 1]
 
     add_pos, remove_pos = [], []
     for node in bnodes:
@@ -888,9 +858,7 @@ def assemble_full_matrices_ff_ss(CompStruct: Any, FEMatrices: Dict, FullMatrices
 
 def assemble_full_matrices_rigid(CompStruct: Any, FEMatrices: Dict, FullMatrices: Dict,
                                  ii_int: int, ii_d1: int, ii_d2: int) -> Dict:
-    """
-    Replicates AssembleFullMatrices_rigid_SAFE_cubic.m
-    """
+    """Replicates AssembleFullMatrices_rigid_SAFE_cubic.m"""
     if not FullMatrices:
         d1 = ii_d1
         FullMatrices = {
@@ -907,7 +875,8 @@ def assemble_full_matrices_rigid(CompStruct: Any, FEMatrices: Dict, FullMatrices
     edge_indices = np.where(interface_mask)[0]
 
     constrained_dofs = []
-    var_num = CompStruct.Data['DVarNum'][ii_d1 - 1]
+    # ИСПРАВЛЕНИЕ: доступ через атрибуты dataclass
+    var_num = CompStruct.Data.DVarNum[ii_d1 - 1]
 
     for edge_idx in edge_indices:
         n1, n2 = bnd_edges[0:2, edge_idx]
@@ -926,9 +895,7 @@ def assemble_full_matrices_rigid(CompStruct: Any, FEMatrices: Dict, FullMatrices
 
 def assemble_full_matrices_free(CompStruct: Any, FEMatrices: Dict, FullMatrices: Dict,
                                 ii_int: int, ii_d1: int, ii_d2: int) -> Dict:
-    """
-    Replicates AssembleFullMatrices_free_SAFE_cubic.m
-    """
+    """Replicates AssembleFullMatrices_free_SAFE_cubic.m"""
     if not FullMatrices:
         d1 = ii_d1
         FullMatrices = {
@@ -957,10 +924,7 @@ def assemble_full_matrices_free(CompStruct: Any, FEMatrices: Dict, FullMatrices:
 
 
 def merge_coincident_dofs(FullMatrices: Dict, FEMatrices: Dict) -> Dict:
-    """
-    Merge DOFs for solid-solid interfaces
-    Replicates summation logic in AssembleFullMatrices_ff_ss_SAFE_cubic.m
-    """
+    """Merge DOFs for solid-solid interfaces"""
     if 'DTakeFromVarPos' not in FEMatrices:
         return FullMatrices
 
@@ -987,14 +951,12 @@ def merge_coincident_dofs(FullMatrices: Dict, FEMatrices: Dict) -> Dict:
 
 
 def remove_redundant_variables(CompStruct: Any, FEMatrices: Dict, FullMatrices: Dict) -> Tuple:
-    """
-    Replicates RemoveRedundantVariables_SAFE.m
-    """
+    """Replicates RemoveRedundantVariables_SAFE.m"""
     logger.debug("        Removing redundant variables...")
 
     # Collect all DOFs to remove
     all_removed = []
-    for d in range(1, CompStruct.Data['N_domain'] + 1):
+    for d in range(1, CompStruct.Data.N_domain + 1):
         if d in FEMatrices['DNodesRem']:
             all_removed.extend(FEMatrices['DNodesRem'][d])
         if d in FEMatrices['DZeroVarPos']:
@@ -1006,6 +968,9 @@ def remove_redundant_variables(CompStruct: Any, FEMatrices: Dict, FullMatrices: 
     all_removed = np.unique(all_removed)
     total_dofs = FullMatrices['M'].shape[0]
     free_dofs = np.setdiff1d(np.arange(total_dofs), all_removed)
+
+    if len(free_dofs) == 0:
+        raise RuntimeError("All DOFs were marked for removal!")
 
     # Reduce matrices
     for name in ['K1', 'K2', 'K3', 'M', 'P']:

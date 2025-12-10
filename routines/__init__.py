@@ -1,6 +1,4 @@
-"""
-Low-Level SAFE Routines
-"""
+# routines/__init__.py
 
 from .matrix_assembly import (
     assemble_basic_matrices,
@@ -17,6 +15,7 @@ from .matrix_assembly import (
 
 from .meshgen import prepare_mesh
 from .io_utils import cleanup_output_dir, finalize_results
+from .asymptotes import compute_asymptotes_safe, v_phase_vti_exact_rph
 
 __all__ = [
     'assemble_basic_matrices',
@@ -30,6 +29,8 @@ __all__ = [
     'rot_matrix',
     'ic_matrices_fluid_htti',
     'ic_matrices_ff_ss',
+    'compute_asymptotes_safe',  # Key function
+    'v_phase_vti_exact_rph',     # Key function
     'cleanup_output_dir',
     'finalize_results'
 ]
