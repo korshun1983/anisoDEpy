@@ -173,46 +173,31 @@ def validate_input_param(InputParam: InputParam) -> None:
     """
     logger.debug("  Validating InputParam...")
 
-    # === ПРОВЕРКА МАССИВОВ ГРАНИЦ ===
-    n_boundaries = len(InputParam.Model['DomainRx'])
+    # === MATLAB COMPATIBILITY: DomainRx are layer outer radii ===
+    n_layers = len(InputParam.Model['DomainRx'])
     n_domains = len(InputParam.Model['DomainType'])
 
-    # DomainRx должен быть на 1 больше, чем DomainType
-    if n_boundaries != n_domains + 1:
-        raise ValueError(
-            f"DomainRx length ({n_boundaries}) should be DomainType length + 1 ({n_domains + 1})"
-        )
+    if n_layers != n_domains:
+        raise ValueError(f"DomainRx length ({n_layers}) must equal DomainType ({n_domains})")
 
-    # Массивы ГРАНИЦ должны совпадать с n_boundaries
-    boundary_arrays = ['DomainRy', 'DomainTheta', 'DomainEcc', 'DomainEccAngle']
-    for key in boundary_arrays:
+    # Geometry arrays must match n_layers
+    for key in ["DomainRy", "DomainTheta", "DomainEcc", "DomainEccAngle"]:
         actual_len = len(InputParam.Model[key])
-        if actual_len != n_boundaries:
-            raise ValueError(
-                f"Domain array length mismatch: {key} (expected {n_boundaries}, got {actual_len})"
-            )
+        if actual_len != n_layers:
+            raise ValueError(f"{key} length ({actual_len}) must match DomainRx ({n_layers})")
 
-    # === КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: DomainNth относится к ДОМЕНАМ ===
+    # Domain arrays must match n_domains
     if 'DomainNth' in InputParam.Model and len(InputParam.Model['DomainNth']) != n_domains:
-        raise ValueError(
-            f"DomainNth length ({len(InputParam.Model['DomainNth'])}) should match DomainType ({n_domains})"
-        )
-    # ============================================================================
+        raise ValueError(f"DomainNth length must match DomainType ({n_domains})")
 
-    # === ПРОВЕРКА МАССИВОВ ДОМЕНОВ ===
     if len(InputParam.Model['DomainParam']) != n_domains:
-        raise ValueError(
-            f"DomainParam length ({len(InputParam.Model['DomainParam'])}) should be {n_domains}"
-        )
+        raise ValueError(f"DomainParam length must be {n_domains}")
 
-    # === ПРОВЕРКА BCType ===
-    expected_bc_length = n_domains + 1  # Всегда на 1 больше, чем доменов
-    if len(InputParam.Model['BCType']) != expected_bc_length:
-        raise ValueError(
-            f"BCType length ({len(InputParam.Model['BCType'])}) should be n_domains + 1 ({expected_bc_length})"
-        )
+    # BCType must match n_domains
+    if len(InputParam.Model['BCType']) != n_domains:
+        raise ValueError(f"BCType length must be {n_domains}")
+    # ============================================================
 
-    # Остальные проверки...
     if len(InputParam.Model['f_array']) == 0:
         raise ValueError("Frequency array is empty")
 

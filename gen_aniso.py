@@ -4,10 +4,10 @@
 SAFE (Spectral Analysis of Finite Elements) for Anisotropic Media
 Main Driver Script - Python Implementation v2.5 (FULLY FIXED)
 ===============================================================================
-НОВОЕ:
-1. Визуализация средствами gmsh (3D окно)
-2. Логирование радиуса PML слоя
-3. Отладочная информация о геометрии
+NEW:
+1. GMSH visualization (3D window)
+2. Logging of PML layer radius
+3. Debug geometry information
 ===============================================================================
 """
 
@@ -24,7 +24,7 @@ from scipy.io import savemat
 import tkinter as tk
 from tkinter import filedialog
 
-# === ОТЛАДКА: импорт для визуализации ===
+# === DEBUG: Import for visualization ===
 import matplotlib.pyplot as plt
 # =========================================
 
@@ -107,48 +107,40 @@ def validate_json_structure(json_data: Dict[str, Any]) -> None:
 
     model = json_data["Model"]
 
-    domain_keys = ["DomainRx", "DomainRy", "DomainType", "DomainParam", "BCType"]
-    for key in domain_keys:
-        if key not in model:
-            raise ValueError(f"Model missing required key: '{key}'")
-
-    n_boundaries = len(model["DomainRx"])
+    # === MATLAB COMPATIBILITY: DomainRx are layer outer radii ===
+    n_layers = len(model["DomainRx"])
     n_domains = len(model["DomainType"])
 
-    # DomainRx должен быть на 1 больше, чем DomainType
-    if n_boundaries != n_domains + 1:
+    # Must have same number of layers and domains
+    if n_layers != n_domains:
         raise ValueError(
-            f"Model.DomainRx length ({n_boundaries}) should be DomainType length + 1 ({n_domains + 1})"
+            f"DomainRx length ({n_layers}) must equal DomainType length ({n_domains})"
         )
 
-    # Массивы ГРАНИЦ должны совпадать с n_boundaries
-    boundary_arrays = ['DomainRy', 'DomainTheta', 'DomainEcc', 'DomainEccAngle']
-    for key in boundary_arrays:
-        if key in model and len(model[key]) != n_boundaries:
+    # All geometry arrays must match n_layers (number of layers)
+    for key in ["DomainRy", "DomainTheta", "DomainEcc", "DomainEccAngle"]:
+        if key in model and len(model[key]) != n_layers:
             raise ValueError(
-                f"Model.{key} length ({len(model[key])}) should match DomainRx ({n_boundaries})"
+                f"Model.{key} length ({len(model[key])}) must match DomainRx ({n_layers})"
             )
 
-    # === КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: DomainNth относится к ДОМЕНАМ ===
+    # Domain-specific arrays must match n_domains
     if 'DomainNth' in model and len(model['DomainNth']) != n_domains:
         raise ValueError(
-            f"Model.DomainNth length ({len(model['DomainNth'])}) should match DomainType ({n_domains})"
+            f"DomainNth length ({len(model['DomainNth'])}) must match DomainType ({n_domains})"
         )
-    # ============================================================================
 
-    # Остальные проверки остаются без изменений...
-
-    # === КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверка BCType с учетом PML ===
-    has_additional = model.get("AddDomainType", "none").lower() != "none"
-    # Базовая модель: BCType имеет длину n_domains + 1 (для внешней границы)
-    # После добавления PML: BCType будет иметь длину n_domains + 1 (автоматически)
-    expected_bc_length = n_domains + 1  # Всегда n_domains + 1 для базовой модели
-
-    if len(model["BCType"]) != expected_bc_length:
+    if len(model["DomainParam"]) != n_domains:
         raise ValueError(
-            f"BCType length ({len(model['BCType'])}) should be n_domains + 1 ({expected_bc_length})"
+            f"DomainParam length ({len(model['DomainParam'])}) must be {n_domains}"
         )
-    # ============================================================================
+
+    # BCType must match n_domains (one per layer's outer boundary)
+    if len(model["BCType"]) != n_domains:
+        raise ValueError(
+            f"BCType length ({len(model['BCType'])}) must be {n_domains}"
+        )
+    # ============================================================
 
     if "f_array_range" not in model:
         raise ValueError("Model missing f_array_range (start, step, end)")
@@ -204,21 +196,21 @@ def setup_additional_domains(CompStruct: CompStruct) -> CompStruct:
         CompStruct.Model['AddDomain_Exist'] = 'yes'
 
         if CompStruct.Model['AddDomainLoc'].lower() == 'ext':
-            # CALCULO DEL RADIO DE LA CAPA PML
+            # CALCULATION OF PML LAYER RADIUS
             last_radius = CompStruct.Model['DomainRx'][-1]
             add_length = CompStruct.Model['AddDomainL']
 
-            # Если LDomain_in_LSH = 'yes', то AddDomainL в длинах волны V_SH
-            # Для простоты сейчас считаем, что в метрах (как в примере)
+            # If LDomain_in_LSH = 'yes', then AddDomainL is in V_SH wavelengths
+            # For simplicity, we now assume it's in meters
             new_radius = last_radius + add_length * 1.0
 
-            # === ЛОГИРОВАНИЕ РАДИУСА PML ===
+            # === PML RADIUS LOGGING ===
             logging.info(f"      Original last radius: {last_radius:.4f} m")
             logging.info(f"      AddDomainL: {add_length}")
             logging.info(f"      NEW PML layer radius: {new_radius:.4f} m")
             # =================================
 
-            # Добавляем новый радиус
+            # Adding new radius
             CompStruct.Model['DomainRx'].append(new_radius)
             CompStruct.Model['DomainRy'].append(new_radius)
             CompStruct.Model['DomainTheta'].append(CompStruct.Model['DomainTheta'][-1])
@@ -230,15 +222,15 @@ def setup_additional_domains(CompStruct: CompStruct) -> CompStruct:
             CompStruct.Model['DomainNth'].append(CompStruct.Model['DomainNth'][-1])
             CompStruct.Model['BCType'][-2] = 'SSstiff'
 
-            # === КРИТИЧЕСКОЕ ОБНОВЛЕНИЕ DataParameters ===
-            # Добавляем переменную для нового PML-домена (копия последнего)
+            # === CRITICAL UPDATE of DataParameters ===
+            # Add variable for new PML domain (copy of last)
             last_domain_vars = CompStruct.Data.DVarNum[-1]
             CompStruct.Data.DVarNum.append(last_domain_vars)
 
-            # Обновляем количество доменов и интерфейсов
+            # Update number of domains and interfaces
             CompStruct.Data.N_domain = len(CompStruct.Model['DomainType'])
             CompStruct.Data.N_interface = CompStruct.Data.N_domain - 1
-            # === КОНЕЦ ОБНОВЛЕНИЯ ===
+            # === END OF UPDATE ===
 
             logging.info(f"      Added {add_type.upper()} external layer")
             logging.info(f"      New BCType: {CompStruct.Model['BCType']}")
@@ -257,47 +249,43 @@ def setup_additional_domains(CompStruct: CompStruct) -> CompStruct:
     return CompStruct
 
 
-def visualize_mesh_gmsh(CompStruct: CompStruct):
+def visualize_mesh_gmsh(CompStruct: CompStruct) -> None:
     """
-    ВИЗУАЛИЗАЦИЯ СРЕДСТВАМИ GMSH (3D окно)
-    Показывает геометрию и сетку в интерактивном окне gmsh
+    Mesh visualization using gmsh (3D window)
+    Shows geometry and mesh in gmsh interactive window
     """
     try:
         import gmsh
 
         logger.info("  Opening GMSH visualization...")
 
-        # Получаем данные сетки
+        # Get mesh data
         MeshNodes = CompStruct.FEMatrices['MeshNodes']
         MeshTri = CompStruct.FEMatrices['MeshTri']
+        n_elements = MeshTri.shape[1]
 
-        # Инициализируем gmsh для визуализации
+        logger.info(f"      Visualizing mesh: {MeshNodes.shape[1]} nodes, {n_elements} elements")
+
+        # Initialize gmsh
         gmsh.initialize()
-        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("General.Terminal", 0)  # Disable terminal output
 
-        model = gmsh.model()
-        model.add("visualization")
+        # Create new model
+        gmsh.model.add("SAFE_MESH_VISUALIZATION")
 
-        # Создаем новую геометрию для визуализации
-        factory = model.occ
-
-        # Создаем диски для каждого домена (для наглядности)
-        radii = CompStruct.Model['DomainRx']
-        for i, r in enumerate(radii):
-            if r > 0:
-                factory.addDisk(0, 0, 0, r, r, tag=i + 100)  # Теги для геометрии
-
-        factory.synchronize()
-
-        # Добавляем точки узлов
+        # Add nodes
         for i in range(MeshNodes.shape[1]):
-            model.geo.addPoint(MeshNodes[0, i], MeshNodes[1, i], 0, tag=i + 1000)
+            gmsh.model.geo.addPoint(MeshNodes[0, i], MeshNodes[1, i], 0, tag=i + 1)
 
-        # Добавляем элементы (упрощенно, только для визуализации)
-        # На самом деле gmsh уже знает сетку, мы могли бы использовать оригинальную модель
-        # Но для простоты открываем окно с геометрией
+        # Add elements (triangles)
+        for el in range(min(n_elements, 10000)):  # Limit 10000 for speed
+            nodes = MeshTri[:3, el].astype(int) + 1  # gmsh tags start from 1
+            gmsh.model.geo.addCurveLoop([nodes[0], nodes[1], nodes[2]])
+            gmsh.model.geo.addPlaneSurface([1])
 
-        # Запускаем gmsh GUI
+        # Synchronize and show
+        gmsh.model.geo.synchronize()
+        gmsh.model.mesh.generate(2)
         gmsh.fltk.initialize()
         gmsh.fltk.run()
 
@@ -312,7 +300,7 @@ def visualize_mesh_gmsh(CompStruct: CompStruct):
 
 def visualize_mesh_final_debug(CompStruct: CompStruct):
     """
-    РАСШИРЕННАЯ ОТЛАДОЧНАЯ визуализация сетки (matplotlib)
+    EXTENDED DEBUG mesh visualization (matplotlib)
     """
     if not hasattr(CompStruct, 'FEMatrices') or CompStruct.FEMatrices is None:
         logger.warning("FEMatrices not found, skipping visualization")
@@ -342,11 +330,11 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
     fig = plt.figure(figsize=(16, 10))
     gs = fig.add_gridspec(2, 3, width_ratios=[2, 1, 1], height_ratios=[3, 1])
 
-    # === ГРАФИК 1: ВСЕ домены вместе ===
+    # === GRAPH 1: ALL domains together ===
     ax_main = fig.add_subplot(gs[0, 0])
     ax_main.set_title(f'ALL DOMAINS - {n_domains} domains', fontsize=14, fontweight='bold')
 
-    # Границы доменов
+    # Domain boundaries
     for i, r in enumerate(domain_rx):
         if r > 0:
             theta = np.linspace(0, 2 * np.pi, 200)
@@ -354,7 +342,7 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
             y = r * np.sin(theta)
             ax_main.plot(x, y, 'k-', linewidth=2, alpha=0.7, label=f'Boundary r={r:.3f}m')
 
-    # Элементы
+    # Elements
     for el in range(max_plot_elements):
         node_ids = MeshTri[:3, el].astype(int)
         nodes = MeshNodes[:, node_ids]
@@ -368,7 +356,7 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
         ax_main.plot(x_coords, y_coords, linestyle=style, color=color,
                      linewidth=0.5, alpha=0.6)
 
-    # Граничные ребра
+    # Boundary edges
     if BoundaryEdges.shape[1] > 0:
         for edge_idx in range(min(BoundaryEdges.shape[1], 500)):
             n1, n2 = BoundaryEdges[:2, edge_idx].astype(int)
@@ -380,12 +368,12 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
     ax_main.axis('equal')
     ax_main.legend(fontsize=8, loc='upper right')
 
-    # === ГРАФИКИ 2-3: По ОТДЕЛЬНОСТИ ===
+    # === GRAPHS 2-3: SEPARATELY ===
     for d in range(min(n_domains, 2)):
         ax = fig.add_subplot(gs[0, 1 + d])
         ax.set_title(f'Domain {d + 1}: {domain_types[d]}', fontsize=10)
 
-        # Границы
+        # Boundaries
         r_inner = domain_rx[d]
         r_outer = domain_rx[d + 1] if d + 1 < len(domain_rx) else np.max(domain_rx)
 
@@ -400,7 +388,7 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
         yo = r_outer * np.sin(theta)
         ax.plot(xo, yo, 'k-', linewidth=2, alpha=0.8)
 
-        # Элементы
+        # Elements
         domain_mask = MeshTri[-1, :].astype(int) == d + 1
         domain_elements = np.where(domain_mask)[0]
 
@@ -414,7 +402,7 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
         ax.grid(True, alpha=0.3)
         ax.axis('equal')
 
-    # === ГРАФИК 4: Статистика ===
+    # === GRAPH 4: Statistics ===
     ax_stats = fig.add_subplot(gs[1, :])
     ax_stats.axis('off')
 
@@ -443,7 +431,7 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
 
 
 def _validate_domain_assignment(MeshNodes: np.ndarray, MeshTri: np.ndarray, domain_rx: np.ndarray):
-    """Проверка корректности назначения элементов доменам по радиусу"""
+    """Check correctness of element assignment to domains by radius"""
     logger.info("  Validating domain assignment...")
 
     tri_nodes = MeshTri[:3, :].astype(int)
@@ -595,14 +583,19 @@ def main():
         print(f"    [OK] Stage 1 complete: {stage1_time:.1f}s")
 
         # Stage 2
-        print("\n[2] Stage 2: Model Preparation & Mesh Generation")
+        print("\n[2] Stage 2: Model Preparation")
         stage2_start = time.time()
         CompStruct = stage2.prepare_model(InputParam)
 
-        # === Добавляем PML и логируем радиус ===
+        # Add PML layer
+        print("\n[2.5] Adding PML/ABC domain")
         CompStruct = setup_additional_domains(CompStruct)
 
-        # === ВЫБОР ВИЗУАЛИЗАЦИИ ===
+        # Generate mesh with all domains
+        print("\n[2.6] Mesh Generation")
+        CompStruct = stage2.generate_mesh(CompStruct)
+
+        # === VISUALIZATION SELECTION ===
         if CompStruct.Mesh.output.lower() == 'yes':
             logger.info("  Select visualization:")
             logger.info("    1: GMSH (3D interactive)")
@@ -610,7 +603,7 @@ def main():
             logger.info("    3: Both")
             logger.info("    0: Skip")
 
-            # Для автоматизации можно задать в JSON
+            # Can be set in JSON for automation
             vis_choice = CompStruct.Model.get('viz_mode', '2')
 
             if vis_choice == '1':

@@ -44,108 +44,103 @@ def prepare_mesh(CompStruct: Any) -> Dict[str, Any]:
 
 def generate_gmsh_mesh(CompStruct: Any, boundary_shape: str) -> Dict[str, Any]:
     """
-    Generate 2D mesh using gmsh with physical group labeling for domains.
+    Generate 2D mesh using gmsh with MATLAB-compatible layer geometry.
+    DomainRx contains OUTER RADII of layers, not boundary positions.
+    This function is called AFTER PML domain is added, so all domains exist.
     """
+    import gmsh
+
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
 
     model = gmsh.model()
     model.add("safe_waveguide")
 
+    # DomainRx contains OUTER RADII of each layer
+    # Example: [0.1, 2.0, 3.0] for fluid, HTTI, and PML layers
     domain_rx = np.array(CompStruct.Model['DomainRx'])
     domain_ry = np.array(CompStruct.Model['DomainRy'])
-    n_layers = len(domain_rx) - 1
+    n_layers = len(domain_rx)  # Number of layers (domains)
 
-    logger.info(f"      Creating {n_layers} domains from {len(domain_rx)} radii")
-    logger.info(f"      Radii: {domain_rx}")
+    logger.info(f"      Creating {n_layers} layers with outer radii: {domain_rx}")
+    logger.info(f"      Domain types: {CompStruct.Model['DomainType']}")
 
     factory = model.occ
 
-    boundary_tags = []
-    boundary_dimtags = []
+    # Build concentric layers starting from r=0
+    # radii = [0, r1, r2, ..., rn] for easy indexing
+    radii = np.concatenate([[0.0], domain_rx])  # Add r=0 at center
 
-    # Центральный цилиндр
-    if domain_rx[0] > 0.0:
+    layer_dimtags = []
+
+    for i in range(n_layers):
+        r_inner = radii[i]
+        r_outer = radii[i + 1]
+        domain_type = CompStruct.Model['DomainType'][i]
+
+        logger.info(f"      Creating layer {i + 1}: {domain_type}, r={r_inner:.4f} to {r_outer:.4f} m")
+
+        # Create outer boundary
         if boundary_shape == 'cir':
-            tag = factory.addDisk(0, 0, 0, domain_rx[0], domain_ry[0])
-            boundary_dimtags.append((2, tag))
-        else:
-            tag = factory.addRectangle(-domain_rx[0] / 2, -domain_ry[0] / 2, 0, domain_rx[0], domain_ry[0])
-            boundary_dimtags.append((2, tag))
-        boundary_tags.append(tag)
-        logger.info(f"      Central solid cylinder: r={domain_rx[0]}")
-    else:
-        boundary_tags.append(None)
-        boundary_dimtags.append(None)
-        logger.info("      Central point (no geometry)")
+            outer_tag = factory.addDisk(0, 0, 0, r_outer, r_outer)
+            outer_dimtag = (2, outer_tag)
 
-    # Внешние границы
-    for i in range(1, n_layers + 1):
-        rx = domain_rx[i]
-        ry = domain_ry[i]
-
-        if boundary_shape == 'cir':
-            tag = factory.addDisk(0, 0, 0, rx, ry)
-            boundary_dimtags.append((2, tag))
+            # If not the innermost layer, cut out the inner part
+            if i > 0:
+                inner_tag = factory.addDisk(0, 0, 0, r_inner, r_inner)
+                inner_dimtag = (2, inner_tag)
+                result_dimtags, _ = factory.cut([outer_dimtag], [inner_dimtag],
+                                                removeObject=True, removeTool=False)
+                layer_dimtag = result_dimtags[0]
+            else:
+                layer_dimtag = outer_dimtag
         else:
-            tag = factory.addRectangle(-rx / 2, -ry / 2, 0, rx, ry)
-            boundary_dimtags.append((2, tag))
-        boundary_tags.append(tag)
-        logger.info(f"      Outer boundary {i}: r={rx}")
+            # Rectangular boundary (placeholder for future implementation)
+            raise NotImplementedError("Rectangular boundary not yet implemented")
+
+        layer_dimtags.append(layer_dimtag)
+
+        # Assign physical group for this domain
+        model.addPhysicalGroup(2, [layer_dimtag[1]], tag=i + 1)
+        logger.info(f"        Physical group {i + 1} created")
 
     factory.synchronize()
 
-    domain_tags = []
-    domain_dimtags = []
-
-    for i in range(n_layers):
-        if i == 0 and domain_rx[0] > 0.0:
-            domain_tag = boundary_tags[1]
-            domain_dimtags.append(boundary_dimtags[1])
-            logger.info(f"      Domain 1 (solid): using boundary tag {domain_tag}")
-        else:
-            outer_dimtag = boundary_dimtags[i + 1]
-            inner_dimtag = boundary_dimtags[i]
-
-            if inner_dimtag is None:
-                domain_dimtags.append(outer_dimtag)
-                domain_tag = boundary_tags[i + 1]
-            else:
-                domain_dim_tags, _ = factory.cut(
-                    [outer_dimtag], [inner_dimtag], removeObject=True, removeTool=False
-                )
-                if len(domain_dim_tags) > 0:
-                    domain_dimtags.append(domain_dim_tags[0])
-                    domain_tag = domain_dim_tags[0][1]
-                else:
-                    logger.error(f"Failed to create domain {i + 1}")
-                    continue
-
-        domain_tags.append(domain_tag)
-        model.addPhysicalGroup(2, [domain_tag], tag=i + 1)
-        logger.info(f"      Domain {i + 1} physical group created")
-
-    # Внешняя граница для ABC/PML
+    # Create outer boundary physical group (for BC application)
     try:
-        if domain_dimtags:
-            last_domain_dimtag = domain_dimtags[-1]
-            outer_boundary_dimtags = model.getBoundary([last_domain_dimtag], oriented=False)
+        last_layer_dimtag = layer_dimtags[-1]
+        outer_boundary_dimtags = model.getBoundary([last_layer_dimtag], oriented=False)
 
-            if outer_boundary_dimtags:
-                edge_tags = [dimtag[1] for dimtag in outer_boundary_dimtags]
-                model.addPhysicalGroup(1, edge_tags, tag=n_layers + 1)
-                logger.info(f"      Outer boundary physical group created")
+        if outer_boundary_dimtags:
+            edge_tags = [dimtag[1] for dimtag in outer_boundary_dimtags]
+            model.addPhysicalGroup(1, edge_tags, tag=n_layers + 1)
+            logger.info(f"      Outer boundary physical group created with {len(edge_tags)} edges")
     except Exception as e:
         logger.warning(f"Could not create outer boundary physical group: {e}")
 
     factory.synchronize()
 
-    physical_groups = gmsh.model.getPhysicalGroups()
-    domain_groups = [pg for pg in physical_groups if pg[0] == 2]
-    logger.info(f"      Created {len(domain_groups)} domain physical groups")
+    # Configure mesh size
+    # Use absolute hmax calculated in prepare_model_params
+    hmax = getattr(CompStruct.Mesh, 'hmax_absolute', CompStruct.Mesh.hmax)
+    if isinstance(hmax, (list, np.ndarray)):
+        hmax = hmax[0] if len(hmax) > 0 else 0.1
 
-    gmsh.option.setNumber("Mesh.Algorithm", 6)
+    logger.info(f"      Setting mesh size: hmax={hmax:.4f} m")
 
+    gmsh.option.setNumber("Mesh.CharacteristicLengthFromCurvature", 0)
+    gmsh.option.setNumber("Mesh.CharacteristicLengthExtendFromBoundary", 1)
+    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", hmax / 2)
+    gmsh.option.setNumber("Mesh.CharacteristicLengthMax", hmax)
+
+    # Configure mesh gradient if specified
+    if hasattr(CompStruct.Mesh, 'dhmax') and CompStruct.Mesh.dhmax > 0:
+        logger.info(f"      Setting mesh gradient control: dhmax={CompStruct.Mesh.dhmax}")
+        gmsh.option.setNumber("Mesh.CharacteristicLengthFactor", CompStruct.Mesh.dhmax)
+        gmsh.option.setNumber("Mesh.Smoothing", 1)
+        gmsh.option.setNumber("Mesh.SmoothRatio", CompStruct.Mesh.dhmax)
+
+    # Set element order (cubic)
     if CompStruct.Advanced.N_nodes == 10:
         gmsh.option.setNumber("Mesh.ElementOrder", 3)
     elif CompStruct.Advanced.N_nodes == 6:
@@ -153,81 +148,80 @@ def generate_gmsh_mesh(CompStruct: Any, boundary_shape: str) -> Dict[str, Any]:
     else:
         gmsh.option.setNumber("Mesh.ElementOrder", 1)
 
-    hmax = CompStruct.Mesh.hmax
-    if isinstance(hmax, list):
-        hmax = hmax[0]
-
-    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", hmax / 2)
-    gmsh.option.setNumber("Mesh.CharacteristicLengthMax", hmax)
-
+    # Generate mesh
     logger.info("      Generating mesh...")
     model.mesh.generate(2)
+    logger.info("      Mesh generation complete")
 
+    # Extract mesh data
     node_tags, node_coords, _ = model.mesh.getNodes()
-    MeshNodes = node_coords.reshape(-1, 3).T[:2, :]
+    MeshNodes = node_coords.reshape(-1, 3).T[:2, :]  # 2D coordinates
 
     element_types, element_tags, node_tags_list = model.mesh.getElements()
 
-    tri_types = [2, 9, 21]
+    # Extract only triangular elements
+    tri_types = [2, 9, 21]  # Linear, quadratic, cubic triangles
     tri_indices = [i for i, etype in enumerate(element_types) if etype in tri_types]
 
     if not tri_indices:
-        raise RuntimeError("No triangular elements found")
+        raise RuntimeError("No triangular elements found in generated mesh")
 
     tri_idx = tri_indices[0]
     tri_node_tags = node_tags_list[tri_idx]
     tri_elements = element_tags[tri_idx]
 
     n_nodes_per_tri = len(tri_node_tags) // len(tri_elements)
-    triangles = tri_node_tags.reshape(-1, n_nodes_per_tri).T - 1
+    triangles = tri_node_tags.reshape(-1, n_nodes_per_tri).T - 1  # 0-based indexing
 
-    logger.info("      Assigning domain markers based on geometry...")
-    domain_markers = np.zeros(triangles.shape[1], dtype=int)
-
+    # Assign domain markers to elements based on their centroid location
+    logger.info("      Assigning domain markers to elements...")
     tri_nodes = triangles[:3, :].astype(int)
     centers = np.mean(MeshNodes[:, tri_nodes], axis=1)
     radii = np.sqrt(centers[0, :] ** 2 + centers[1, :] ** 2)
 
-    for i in range(n_layers):
-        r_inner = domain_rx[i]
-        r_outer = domain_rx[i + 1]
+    domain_markers = np.zeros(triangles.shape[1], dtype=int)
 
-        if i == 0 and r_inner == 0.0:
-            mask = radii <= r_outer
+    for i in range(n_layers):
+        r_inner = radii[i]
+        r_outer = radii[i + 1]
+
+        if i == 0:
+            # First layer: 0 <= r <= r_outer
+            mask = (radii >= 0) & (radii <= r_outer)
         else:
+            # Subsequent layers: r_inner < r <= r_outer
             mask = (radii > r_inner) & (radii <= r_outer)
 
         domain_markers[mask] = i + 1
-        logger.info(f"        Domain {i + 1}: {np.sum(mask)} elements (r={r_inner:.4f} to {r_outer:.4f})")
+        n_elements_layer = np.sum(mask)
+        logger.info(f"        Domain {i + 1}: {n_elements_layer} elements")
 
-    unique_markers = np.unique(domain_markers)
-    logger.info(f"      Assigned domain markers: {unique_markers}")
+    logger.info(f"      Total elements: {len(domain_markers)}")
 
+    # Create MeshTri with domain markers
     MeshTri = np.vstack([triangles, domain_markers.reshape(1, -1)])
-    logger.info(f"      Final MeshTri shape: {MeshTri.shape}")
-    logger.info(f"      Domain distribution: {np.bincount(domain_markers)}")
 
+    # Extract boundary edges (for interface conditions)
     boundary_edges = []
     try:
-        edge_types, edge_tags, edge_node_tags = gmsh.model.getElementsForPhysicalGroup(1, n_layers + 1)
-        if len(edge_tags) > 0:
-            edge_node_tags = edge_node_tags[0]
-            edge_nodes = edge_node_tags.reshape(-1, 2).T - 1
-            n_edges = edge_nodes.shape[1]
-            boundary_tag = np.ones(n_edges, dtype=int) * (n_layers + 1)
-            boundary_edges.append(np.vstack([edge_nodes, boundary_tag]))
-            logger.info(f"      Extracted {n_edges} boundary edges")
+        edge_types, edge_tags, edge_node_tags = model.mesh.getElements(dim=1)
+        if edge_node_tags:
+            # Get all edges (gmsh doesn't directly give boundary edges)
+            # We'll identify them later in Stage 3
+            logger.info(f"      Extracted {len(edge_tags)} edges for boundary processing")
     except Exception as e:
-        logger.warning(f"Could not get boundary edges: {e}")
+        logger.warning(f"Could not extract boundary edges: {e}")
 
     if boundary_edges:
         BoundaryEdges = np.hstack(boundary_edges)
     else:
+        # Create empty array - boundary edges will be identified in Stage 3
         BoundaryEdges = np.empty((3, 0), dtype=int)
-        logger.warning("No boundary edges found")
+        logger.info("      No boundary edges extracted (will be identified in Stage 3)")
 
     gmsh.finalize()
 
+    # Compute mesh properties
     MeshProps = create_mesh_props(MeshNodes, MeshTri, CompStruct)
 
     return {

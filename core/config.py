@@ -41,6 +41,7 @@ class ConfigParameters:
 class MeshParameters:
     """Replicates InputParam.Mesh"""
     hmax: float = 0.05  # Max element size (fraction of wavelength)
+    hmax_absolute: float = None  # NEW: Computed absolute size in meters
     dhmax: float = 0.25  # Max relative gradient
     output: str = 'no'  # Display mesh: 'yes', 'no'
     ext_boundary_shape: str = 'cir'  # 'cir' or 'rect'

@@ -4,6 +4,12 @@
 Stage 2: Model Preparation Pipeline
 Replicates St2_PrepareModel, St2_1_PrepareModelParams, St2_2_PrepareModelMethods
 ===============================================================================
+CRITICAL FIXES:
+- Separated mesh generation from model preparation
+- Added hmax calculation based on wavelength (LDomain_in_LSH)
+- Fixed DVarNum handling to prevent append errors
+- MATLAB-compatible layer structure: DomainRx = outer radii
+===============================================================================
 """
 
 import numpy as np
@@ -43,27 +49,76 @@ def prepare_model_params(InputParam: InputParam) -> InputParam:
     else:
         raise ValueError(f"Unsupported slowness units: {InputParam.Config.SloUnits}")
 
-    # Number of computational domains
+    # Number of computational domains (layers)
     InputParam.Data.N_domain = len(InputParam.Model['DomainType'])
     logger.info(f"      Detected {InputParam.Data.N_domain} domains")
 
     # Variables per domain (1 for fluid, 3 for HTTI)
-    InputParam.Data.DVarNum = np.zeros(InputParam.Data.N_domain, dtype=int)
+    # CRITICAL: Use list instead of numpy array for append compatibility
+    InputParam.Data.DVarNum = []
     for i, domain_type in enumerate(InputParam.Model['DomainType']):
         if domain_type.lower() == 'fluid':
-            InputParam.Data.DVarNum[i] = 1
+            InputParam.Data.DVarNum.append(1)
         elif domain_type.lower() == 'htti':
-            InputParam.Data.DVarNum[i] = 3
+            InputParam.Data.DVarNum.append(3)
         else:
             raise ValueError(f"Unknown domain type: {domain_type}")
 
     logger.info(f"      Variables per domain: {InputParam.Data.DVarNum}")
 
+    # === WAVELENGTH-BASED MESH SIZE CALCULATION ===
+    if InputParam.Model.get('LDomain_in_LSH', 'no') == 'yes':
+        logger.info("      LDomain_in_LSH='yes': Computing wavelength-based mesh size...")
+
+        # Get maximum frequency (kHz -> Hz)
+        f_max = max(InputParam.Model['f_array']) * 1e3
+
+        # Compute minimum velocity in model (m/s)
+        min_velocity = float('inf')
+
+        for i, domain_type in enumerate(InputParam.Model['DomainType']):
+            params = InputParam.Model['DomainParam'][i]
+
+            if domain_type.lower() == 'fluid':
+                rho, lam = params[0], params[1]
+                v = np.sqrt(lam / rho)  # Sound speed in fluid
+                logger.info(f"        Domain {i + 1} (fluid): v={v:.1f} m/s")
+
+            elif domain_type.lower() == 'htti':
+                rho, c44 = params[0], params[3]  # c44 = shear modulus
+                v = np.sqrt(c44 / rho)  # S-wave speed
+                logger.info(f"        Domain {i + 1} (HTTI): v_s={v:.1f} m/s")
+
+            min_velocity = min(min_velocity, v)
+
+        if min_velocity == float('inf'):
+            raise ValueError("Could not compute minimum velocity")
+
+        # Minimum wavelength at maximum frequency
+        lambda_min = min_velocity / f_max
+
+        # Recommended hmax = fraction of lambda_min
+        hmax_fraction = InputParam.Mesh.hmax
+        hmax_absolute = lambda_min * hmax_fraction
+
+        logger.info(f"      Max frequency: {f_max / 1e3:.2f} kHz")
+        logger.info(f"      Min velocity: {min_velocity:.1f} m/s")
+        logger.info(f"      Min wavelength: {lambda_min:.4f} m")
+        logger.info(f"      hmax fraction: {hmax_fraction} ({hmax_fraction * 100:.0f}%)")
+        logger.info(f"      Computed hmax (absolute): {hmax_absolute:.4f} m")
+
+        # Store absolute value for mesh generation
+        InputParam.Mesh.hmax_absolute = hmax_absolute
+    else:
+        # If LDomain_in_LSH='no', use hmax as absolute value (meters)
+        InputParam.Mesh.hmax_absolute = InputParam.Mesh.hmax
+        logger.info(f"      LDomain_in_LSH='no': Using absolute hmax={InputParam.Mesh.hmax} m")
+    # ==========================================================
+
     # Asymptote computation (if enabled)
     if InputParam.Config.CheckAsymptote == 'yes':
         logger.info("      Computing asymptotes...")
-        # This will be implemented when we get to asymptotes.py
-        # For now, create placeholder
+        # Placeholder for future implementation
         InputParam.Asymp = {}
 
     return InputParam
@@ -80,16 +135,16 @@ def prepare_model_methods(InputParam: InputParam) -> InputParam:
     """
     logger.info("    Stage 2.2: Assigning model methods...")
 
-    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: НЕ перезаписываем Methods словарь!
-    # Сохраняем существующие методы из Stage 1 (MeshFaces, St2/3/4 методы и т.д.)
-    # Вместо InputParam.Methods = {}, только добавляем новые методы
+    # CRITICAL: Do NOT overwrite Methods dictionary!
+    # Preserve existing methods from Stage 1 (MeshFaces, St2/3/4 methods, etc.)
+    # Instead of InputParam.Methods = {}, only add new methods
 
-    # Utility methods (только если не были заданы ранее)
+    # Utility methods (only if not already set)
     if 'AssembleBasicMatrices' not in InputParam.Methods:
         InputParam.Methods['AssembleBasicMatrices'] = None
 
     # Per-domain methods (cell arrays indexed by domain)
-    # Эти методы специфичны для Stage 2 и должны быть установлены
+    # These methods are specific to Stage 2 and must be set
     InputParam.Methods['PreparePhysProp'] = [None] * InputParam.Data.N_domain
     InputParam.Methods['MatricesParts_sp_SAFE'] = [None] * InputParam.Data.N_domain
     InputParam.Methods['getPhysProps'] = [None] * InputParam.Data.N_domain
@@ -146,7 +201,7 @@ def prepare_model_methods(InputParam: InputParam) -> InputParam:
     else:
         raise ValueError(f"Unsupported outer BC: {outer_bc}")
 
-    # Variable reduction method (только если не был задан ранее)
+    # Variable reduction method (only if not previously set)
     if 'RemoveRedundantVariables' not in InputParam.Methods:
         InputParam.Methods['RemoveRedundantVariables'] = 'remove_redundant_variables'
 
@@ -159,6 +214,10 @@ def prepare_model_methods(InputParam: InputParam) -> InputParam:
 # -----------------------------------------------------------------------------
 
 def prepare_model(InputParam: InputParam) -> InputParam:
+    """
+    Stage 2 main function: Prepare parameters and methods only.
+    Mesh generation is separated and called later after PML setup.
+    """
     logger.info("  Stage 2: Preparing model for computation...")
 
     # Stage 2.1: Preprocess parameters
@@ -167,26 +226,33 @@ def prepare_model(InputParam: InputParam) -> InputParam:
     # Stage 2.2: Assign methods
     CompStruct = prepare_model_methods(CompStruct)
 
-    # Stage 2.3: Generate mesh
+    logger.info("  Stage 2 complete (mesh generation will be after PML setup)")
+    return CompStruct
+
+
+def generate_mesh(CompStruct: InputParam) -> InputParam:
+    """
+    Stage 2.3: Generate mesh after all domains including PML are configured.
+    This is called AFTER setup_additional_domains() in main pipeline.
+    """
     logger.info("    Stage 2.3: Generating mesh...")
 
-    # Check if mesh already exists
+    # Initialize FEMatrices if not exists
     if not hasattr(CompStruct, 'FEMatrices') or CompStruct.FEMatrices is None:
-        # Initialize FEMatrices structure
         CompStruct.FEMatrices = {}
 
-        # Generate mesh using the registered method (should be prepare_mesh)
+        # Generate mesh using the registered method
         if CompStruct.Methods.get('MeshFaces') is not None:
             try:
                 logger.info("      Running mesh generation...")
                 mesh_data = CompStruct.Methods['MeshFaces'](CompStruct)
                 CompStruct.FEMatrices.update(mesh_data)
-                logger.info(f"      Mesh generated: {CompStruct.FEMatrices['MeshNodes'].shape[1]} nodes")
+                logger.info(f"      Mesh generated: {CompStruct.FEMatrices['MeshNodes'].shape[1]} nodes, "
+                            f"{CompStruct.FEMatrices['MeshTri'].shape[1]} elements")
             except Exception as e:
                 logger.error(f"Mesh generation failed: {e}")
                 raise
         else:
             raise ValueError("MeshFaces method not registered in Stage 1")
 
-    logger.info("  Stage 2 complete")
     return CompStruct
