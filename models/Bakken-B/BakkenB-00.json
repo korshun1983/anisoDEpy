@@ -37,9 +37,9 @@
   },
   "Mesh": {
     "output": "yes",
-    "hmax": 0.05,
+    "hmax": 0.16,
     "dhmax": 0.25,
     "ext_boundary_shape": "cir"
   },
-  "viz_mode": "3"
+  "viz_mode": "2"
 }

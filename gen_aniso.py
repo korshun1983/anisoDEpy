@@ -431,7 +431,7 @@ def visualize_mesh_final_debug(CompStruct: CompStruct):
 
 
 def _validate_domain_assignment(MeshNodes: np.ndarray, MeshTri: np.ndarray, domain_rx: np.ndarray):
-    """Check correctness of element assignment to domains by radius"""
+    """Проверка корректности назначения элементов доменам"""
     logger.info("  Validating domain assignment...")
 
     tri_nodes = MeshTri[:3, :].astype(int)
@@ -439,30 +439,26 @@ def _validate_domain_assignment(MeshNodes: np.ndarray, MeshTri: np.ndarray, doma
     radii = np.sqrt(centers[0, :] ** 2 + centers[1, :] ** 2)
     domain_markers = MeshTri[-1, :].astype(int)
 
-    n_errors = 0
-    error_threshold = 0.01
+    # MATLAB: DomainRx - внешние радиусы
+    # Элемент в домене i, если: domain_rx[i-1] < r <= domain_rx[i]
 
+    n_errors = 0
     for el in range(len(domain_markers)):
         r = radii[el]
         domain_id = domain_markers[el] - 1
 
-        if domain_id < 0 or domain_id >= len(domain_rx) - 1:
-            if n_errors < 5:
-                logger.warning(f"    Element {el}: invalid domain marker = {domain_id + 1}")
-            n_errors += 1
-            continue
+        r_inner = domain_rx[domain_id - 1] if domain_id > 0 else 0.0
+        r_outer = domain_rx[domain_id]
 
-        r_inner = domain_rx[domain_id]
-        r_outer = domain_rx[domain_id + 1] if domain_id + 1 < len(domain_rx) else np.inf
-
-        if not (r_inner * (1 - error_threshold) <= r <= r_outer * (1 + error_threshold)):
+        if not (r_inner < r <= r_outer):
             if n_errors < 5:
                 logger.warning(
-                    f"    Element {el}: r={r:.4f} not in domain {domain_id + 1} [{r_inner:.4f}, {r_outer:.4f}]")
+                    f"    Element {el}: r={r:.4f} not in domain {domain_id + 1} ]{r_inner:.4f}, {r_outer:.4f}]")
             n_errors += 1
 
     if n_errors > 0:
-        logger.warning(f"  Found {n_errors} elements with suspicious domain assignment")
+        logger.error(f"  VALIDATION FAILED: {n_errors} elements in wrong domains")
+        raise RuntimeError("Mesh domain assignment is incorrect")
     else:
         logger.info("  Domain assignment validation PASSED")
 
