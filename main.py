@@ -194,7 +194,7 @@ def main():
             freq_hz_all, slow_all = [], []
             for f_khz, res in zip(freq_list, results_for_interp):
                 f_hz = f_khz * 1e3  # kHz -> Hz
-                slow = 1.0 / res["eig_val"]  # (nev,)  s/m
+                slow = res["eig_val"] / f_hz  # (nev,)  s/m
                 freq_hz_all.extend([f_hz] * slow.size)
                 slow_all.extend(slow)
 
