@@ -8,7 +8,17 @@ EXACT MATLAB equivalent - main entry point with JSON file selection dialog.
 import os
 import sys
 import json
+import atexit
 from pathlib import Path
+import numpy as np
+
+# ИМПОРТ СРАЗУ В НАЧАЛО!
+sys.path.insert(0, str(Path(__file__).parent))
+from utils import debug_print, timer  # <-- Импорт ПЕРЕД использованием
+from routines.mesh.mesh_generator import cleanup_gmsh
+
+# Регистрация cleanup ПОСЛЕ успешного импорта
+atexit.register(cleanup_gmsh)
 
 # For file dialog
 try:
@@ -20,30 +30,24 @@ except ImportError:
     TKINTER_AVAILABLE = False
     debug_print("WARNING: tkinter not available, using command-line fallback", level=1)
 
-# Add current directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
-
+# Импорты модулей проекта
 from stage1.st1_set_model import st1_set_model
 from stage2.st2_prepare_model_sp_safe import st2_prepare_model_sp_safe
-from utils import debug_print, timer
 
 
 def select_model_file() -> str:
-    """
-    Open file dialog to select JSON model file.
-    Returns empty string if dialog canceled or no GUI available.
-    """
+    """Open file dialog to select JSON model file."""
     if not TKINTER_AVAILABLE:
         return ""
 
     try:
         root = tk.Tk()
-        root.withdraw()  # Hide main window
-        root.attributes('-topmost', True)  # Bring to front
+        root.withdraw()
+        root.attributes('-topmost', True)
 
-        # Default directory: models/
-        models_dir = Path(__file__).parent / "models"
-        initial_dir = str(models_dir) if models_dir.exists() else "."
+        # ИСПРАВЛЕННЫЙ путь к модели по умолчанию
+        models_dir = Path(__file__).parent / "models" / "Bakken-B"
+        initial_dir = str(models_dir) if models_dir.exists() else str(Path(__file__).parent / "models")
 
         file_path = filedialog.askopenfilename(
             title="Select JSON Model File for SAFE Solver",
@@ -54,7 +58,7 @@ def select_model_file() -> str:
             initialdir=initial_dir
         )
 
-        root.destroy()  # Clean up
+        root.destroy()
         return file_path
     except Exception as e:
         debug_print(f"Could not open file dialog: {e}", level=1)
@@ -75,10 +79,29 @@ def load_model_from_json(file_path: str) -> dict:
         raise
 
 
-def main():
-    """
-    Main execution function - exact MATLAB workflow with model file selection.
-    """
+def validate_mesh(MeshNodes, MeshTri, MeshProps):
+    """Validate that mesh generation succeeded"""
+    if MeshNodes is None or MeshTri is None:
+        raise RuntimeError("Mesh generation returned None")
+
+    if MeshNodes.size == 0:
+        raise RuntimeError("Mesh generation failed: no nodes")
+
+    if MeshTri.size == 0:
+        raise RuntimeError("Mesh generation failed: no elements")
+
+    n_nodes = MeshNodes.shape[1]
+    n_elem = MeshTri.shape[1]
+
+    debug_print(f"  Mesh validation: {n_nodes} nodes, {n_elem} elements", level=3)
+
+    # Check domain assignment
+    unique_domains = np.unique(MeshTri[3, :] if MeshTri.shape[0] >= 4 else MeshTri[2, :])
+    debug_print(f"  Domains assigned: {unique_domains}", level=3)
+
+
+def main() -> int:
+    """Main execution function"""
     debug_print("=" * 80, level=1)
     debug_print("SAFE SOLVER (Python Implementation)", level=1)
     debug_print("Based on ANISO_SAFE D5 - Timur Zharnikov", level=1)
@@ -92,12 +115,12 @@ def main():
     model_file = select_model_file()
 
     if not model_file:
-        # Fallback to default model
-        model_file = Path(__file__).parent / "models" / "bakken_b.json"
+        # ИСПРАВЛЕННЫЙ путь к модели по умолчанию
+        model_file = Path(__file__).parent / "models" / "Bakken-B" / "BakkenB-00.json"
 
         if not model_file.exists():
             debug_print("ERROR: Default model file not found!", level=0)
-            debug_print("Please create models/bakken_b.json or select a model file.", level=0)
+            debug_print("Please create models/Bakken-B/BakkenB-00.json or select a model file.", level=0)
             return 1
         else:
             debug_print(f"Using default model: {model_file}", level=2)
@@ -109,7 +132,7 @@ def main():
     # Stage 1: Model Setup
     # =========================================================================
     with timer("STAGE 1: Model Initialization"):
-        InputParam = st1_set_model(model_data)  # Pass model data to stage1
+        InputParam = st1_set_model(model_data)
 
     # =========================================================================
     # Stage 2: Model Preparation
@@ -122,9 +145,27 @@ def main():
     # =========================================================================
     debug_print("STAGE 3: Mesh Generation", level=1)
     with timer("Mesh Generation"):
-        MeshNodes, BoundaryEdges, MeshTri, MeshProps, CompStruct = CompStruct['Methods']['PrepareMesh'](CompStruct)
+        result = CompStruct['Methods']['PrepareMesh'](CompStruct)
+        debug_print(f"PrepareMesh returned: {type(result)} with {len(result) if result else 'None'} items", level=2)
+
+        # ПРОВЕРКА результата
+        if result is None or len(result) != 5:
+            raise RuntimeError(f"PrepareMesh returned invalid result: {result}")
+
+        MeshNodes, BoundaryEdges, MeshTri, MeshProps, CompStruct = result
+
+        # ВАЛИДАЦИЯ сетки
+        validate_mesh(MeshNodes, MeshTri, MeshProps)
 
     debug_print(f"Mesh generation complete: {MeshNodes.shape[1]} nodes, {MeshTri.shape[1]} elements", level=1)
+
+    if CompStruct.get('Advanced', {}).get('VisualizeMesh', False):
+        import matplotlib.pyplot as plt
+        plt.triplot(MeshNodes[0, :], MeshNodes[1, :], MeshTri[:3, :].T - 1)
+        plt.title(f"Mesh: {MeshNodes.shape[1]} nodes")
+        plt.axis('equal')
+        plt.savefig('mesh.png')
+        debug_print("  Mesh visualization saved: mesh.png", level=2)
 
     # Verify Stage 1 results
     _verify_stage1(InputParam)

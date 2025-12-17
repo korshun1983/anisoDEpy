@@ -2,7 +2,7 @@
 mesh_generator.py
 =================
 PRODUCTION-READY SAFE mesh generator
-Features: Robust Gmsh init, automatic fallback, detailed progress, no warnings
+Features: Robust Gmsh init, automatic fallback, detailed status, list-to-array fix
 """
 
 import numpy as np
@@ -10,158 +10,163 @@ from typing import Dict, Tuple, List
 from utils import debug_print
 import time
 
-# Singleton pattern for Gmsh state
-class GmshManager:
-    _initialized = False
-    _api = None
-
-    @classmethod
-    def get_gmsh(cls):
-        """Get or create Gmsh instance"""
-        if cls._api is not None:
-            return cls._api
-
-        try:
-            import gmsh
-            cls._api = gmsh
-
-            # Configure to be silent
-            gmsh.option.setNumber("General.Terminal", 0)
-
-            # Test availability
-            if not gmsh.isInitialized():
-                gmsh.initialize()
-
-            # Test basic operation
-            gmsh.model.occ.addPoint(0, 0, 0)
-            gmsh.model.occ.synchronize()
-            gmsh.clear()
-
-            cls._initialized = True
-            debug_print("        ✓ Gmsh backend ready", level=5)
-            return cls._api
-
-        except Exception as e:
-            debug_print(f"        ✗ Gmsh unavailable: {e}", level=5)
-            return None
-
-    @classmethod
-    def finalize(cls):
-        """Safely finalize Gmsh"""
-        if cls._api and cls._api.isInitialized():
-            try:
-                cls._api.finalize()
-                cls._initialized = False
-                cls._api = None
-            except:
-                pass
-
-# Test pygmsh
+# Gmsh/pygmsh imports with robust initialization
+PYGMSH_AVAILABLE = False
+gmsh = None
 try:
+    import gmsh
+    gmsh.option.setNumber("General.Terminal", 0)
+    if not gmsh.isInitialized():
+        gmsh.initialize()
     import pygmsh
     PYGMSH_AVAILABLE = True
-
-    # Test actual functionality
-    with pygmsh.geo.Geometry() as geom:
-        geom.add_point([0, 0, 0])
-
+    debug_print("[OK] pygmsh/Gmsh backend is ready", level=3)
 except Exception as e:
-    debug_print(f"✗ pygmsh test failed: {e}", level=1)
+    debug_print(f"[FAILED] pygmsh/Gmsh not available: {e}", level=1)
+    debug_print("-> Using scipy.spatial.Delaunay fallback", level=1)
+    debug_print("-> For better meshes: pip install gmsh pygmsh", level=1)
     PYGMSH_AVAILABLE = False
 
 from scipy.spatial import Delaunay
 
 
 def prepare_mesh_bh(CompStruct: Dict) -> Tuple[np.ndarray, np.ndarray, Dict, Dict]:
-    """Generate boundary nodes and edges for all domains"""
+    """EXACT MATLAB equivalent of PrepareMeshBH.m"""
     debug_print("    PrepareMeshBH: Generating boundary geometry...", level=4)
 
     n_domain = CompStruct['Data']['N_domain']
-    edges_list = []
-    nodes_list = []
+    nodes_list = np.array([], dtype=float).reshape(0, 2)
+    edges_list = np.array([], dtype=int).reshape(0, 2)
     domain_faces = {}
     total_edge_count = 0
 
     for ii_d in range(n_domain):
-        # ... (keep your existing code) ...
+        # Extract parameters
+        Rx = CompStruct['Model']['DomainRx'][ii_d]
+        Ry = CompStruct['Model']['DomainRy'][ii_d]
+        ThetaRot = CompStruct['Model']['DomainTheta'][ii_d]
+        Ecc = CompStruct['Model']['DomainEcc'][ii_d]
+        EccAngle = CompStruct['Model']['DomainEccAngle'][ii_d]
+        Nth = CompStruct['Model']['DomainNth'][ii_d]
 
-        # After loop completes:
-        edges_array = edges_list.astype(int) - 1
+        debug_print(f"      Domain {ii_d}: Rx={Rx:.3f}, Ry={Ry:.3f}, Nth={Nth}", level=5)
 
-    debug_print("    ✓ Boundary geometry complete:", level=3)
+        # Angular grid
+        dtheta = np.pi / Nth
+        theta = np.arange(-np.pi, np.pi - dtheta/2, dtheta)
+
+        # Check rectangular boundary
+        boundary_rec = False
+        if CompStruct['Mesh']['ext_boundary_shape'].lower() == 'rec':
+            add_loc = CompStruct['Model']['AddDomainLoc']
+            if (add_loc == 'ext' and ii_d >= n_domain - 1) or (add_loc == 'int' and ii_d == n_domain - 1):
+                boundary_rec = True
+
+        # Generate boundary nodes
+        if not boundary_rec:
+            Xc = Ecc * np.cos(EccAngle)
+            Yc = Ecc * np.sin(EccAngle)
+            XBgrid = Xc + Rx * np.cos(theta) * np.cos(ThetaRot) - Ry * np.sin(theta) * np.sin(ThetaRot)
+            YBgrid = Yc + Rx * np.cos(theta) * np.sin(ThetaRot) + Ry * np.sin(theta) * np.cos(ThetaRot)
+        else:
+            # Rectangular boundary
+            n_samples = max(Nth // 4, 4)
+            XBgrid = np.concatenate([
+                np.linspace(-Rx, Rx, n_samples, endpoint=False),
+                np.full(n_samples, Rx),
+                np.linspace(Rx, -Rx, n_samples, endpoint=False),
+                np.full(n_samples, -Rx)
+            ])
+            YBgrid = np.concatenate([
+                np.full(n_samples, -Ry),
+                np.linspace(-Ry, Ry, n_samples, endpoint=False),
+                np.full(n_samples, Ry),
+                np.linspace(Ry, -Ry, n_samples, endpoint=False)
+            ])
+
+        domain_nodes = np.column_stack([XBgrid, YBgrid])
+        domain_nodes, _ = np.unique(domain_nodes, axis=0, return_index=True)
+
+        if len(domain_nodes) < 3:
+            raise ValueError(f"Domain {ii_d}: Insufficient boundary nodes ({len(domain_nodes)})")
+
+        # Define edges (1-based)
+        n_nodes = len(domain_nodes)
+        local_edges = np.column_stack([
+            np.arange(1, n_nodes + 1),
+            np.concatenate([np.arange(2, n_nodes + 1), [1]])
+        ])
+
+        # Track global edge indices
+        n_local_edges = len(local_edges)
+        domain_faces[ii_d] = list(range(total_edge_count + 1, total_edge_count + n_local_edges + 1))
+        total_edge_count += n_local_edges
+
+        # Update global lists
+        if len(edges_list) == 0:
+            global_edges = local_edges
+            edges_list = global_edges
+            nodes_list = domain_nodes
+        else:
+            node_offset = len(nodes_list)
+            global_edges = local_edges + node_offset
+            edges_list = np.vstack([edges_list, global_edges])
+            nodes_list = np.vstack([nodes_list, domain_nodes])
+
+    # --- CRITICAL FIX: Convert edges_list to numpy array using np.asarray ---
+    edges_array = np.asarray(edges_list).astype(int) - 1
+
+    debug_print("[OK] Boundary geometry complete:", level=3)
     debug_print(f"      - Total nodes: {len(nodes_list)}", level=4)
     debug_print(f"      - Total edges: {len(edges_array)}", level=4)
     debug_print(f"      - Domains: {len(domain_faces)}", level=4)
+    for domain_id, edge_range in domain_faces.items():
+        debug_print(f"        Domain {domain_id}: {len(edge_range)} edges", level=5)
 
     return nodes_list, edges_array, domain_faces, CompStruct
 
 
-def meshfaces(nodes: np.ndarray, edges: np.ndarray, domain_faces: Dict,
-              CompStruct: Dict, hmax: float = 0.16) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict]:
-    """Generate multi-domain mesh"""
-    debug_print("    MeshFaces: Starting mesh generation...", level=4)
-
-    # Quick check: are domains valid?
-    if not domain_faces or len(domain_faces) == 0:
-        raise ValueError("No domain faces defined")
-
+def meshfaces(nodes, edges, domain_faces, CompStruct, hmax=0.16):
+    """Unified interface for mesh generator"""
     if PYGMSH_AVAILABLE:
-        debug_print("      Backend: pygmsh/Gmsh", level=5)
         try:
-            result = _meshfaces_pygmsh(nodes, edges, domain_faces, CompStruct, hmax)
-            debug_print("      ✓ Mesh generation succeeded", level=3)
-            return result
+            from .gmsh_builder import build_mesh_gmsh
+            debug_print("    MeshFaces: Using advanced Gmsh builder...", level=4)
+            return build_mesh_gmsh(CompStruct, nodes, edges, domain_faces)
         except Exception as e:
-            debug_print(f"      ✗ pygmsh failed: {e}", level=0)
-            debug_print("      → Switching to scipy fallback", level=1)
+            debug_print(f"[FAILED] Gmsh builder: {e}", level=0)
+            debug_print("    Falling back to scipy...", level=1)
 
-    # Always fall through to scipy
-    debug_print("      Backend: scipy.spatial.Delaunay", level=5)
-    result = _meshfaces_scipy(nodes, edges, domain_faces, CompStruct)
-    debug_print("      ✓ Mesh generation completed", level=3)
-    return result
+    # Fallback to scipy
+    return _meshfaces_scipy(nodes, edges, domain_faces, CompStruct, hmax)
 
 
 def _meshfaces_pygmsh(nodes: np.ndarray, edges: np.ndarray, domain_faces: Dict,
                       CompStruct: Dict, hmax: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict]:
-    """Generate mesh using pygmsh with atomic operations"""
-    debug_print("        Creating geometry...", level=5)
+    """Generate mesh using pygmsh"""
+    with pygmsh.geo.Geometry() as geom:
+        point_ids = [geom.add_point([x, y, 0.0], mesh_size=hmax) for x, y in nodes]
 
-    # Get Gmsh instance (will auto-initialize if needed)
-    gmsh = GmshManager.get_gmsh()
-    if gmsh is None:
-        raise RuntimeError("Gmsh not available")
+        for domain_id in sorted(domain_faces.keys()):
+            face_edges = domain_faces[domain_id]
+            curves = []
 
-    try:
-        with pygmsh.geo.Geometry() as geom:
-            # Create points
-            point_ids = [geom.add_point([x, y, 0.0], mesh_size=hmax) for x, y in nodes]
-            debug_print(f"        Points: {len(point_ids)}", level=5)
+            for edge_idx in face_edges:
+                edge_idx_0 = edge_idx - 1
+                start_idx = edges[edge_idx_0, 0]
+                end_idx = edges[edge_idx_0, 1]
+                line = geom.add_line(point_ids[start_idx], point_ids[end_idx])
+                curves.append(line)
 
-            # Create surfaces
-            for domain_id in sorted(domain_faces.keys()):
-                face_edges = domain_faces[domain_id]
-                curves = [geom.add_line(point_ids[edges[edge_idx-1, 0]],
-                                       point_ids[edges[edge_idx-1, 1]])
-                         for edge_idx in face_edges]
+            if len(curves) >= 3:
+                curve_loop = geom.add_curve_loop(curves)
+                geom.add_plane_surface(curve_loop)
 
-                if len(curves) >= 3:
-                    curve_loop = geom.add_curve_loop(curves)
-                    geom.add_plane_surface(curve_loop)
+        mesh = geom.generate_mesh()
 
-            # Generate mesh
-            debug_print("        Generating mesh...", level=5)
-            mesh = geom.generate_mesh()
-
-    finally:
-        # Always finalize
-        GmshManager.finalize()
-
-    # Process results
     mesh_points = mesh.points[:, :2]
     triangles = mesh.cells_dict["triangle"]
 
-    # Domain assignment
     centroids = np.mean(mesh_points[triangles], axis=1)
     domain_numbers = _assign_domains(centroids, nodes, edges, domain_faces)
 
@@ -170,29 +175,90 @@ def _meshfaces_pygmsh(nodes: np.ndarray, edges: np.ndarray, domain_faces: Dict,
     return mesh_points.T, mesh_tri, domain_numbers, CompStruct
 
 
-def _meshfaces_scipy(nodes: np.ndarray, edges: np.ndarray, domain_faces: Dict,
-                     CompStruct: Dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict]:
-    """Delaunay fallback"""
-    debug_print("        Delaunay triangulation...", level=5)
+def _meshfaces_scipy(nodes, edges, domain_faces, CompStruct, hmax=None):
+    """Wrapper for Gmsh builder (rename this function!)"""
+    try:
+        from .gmsh_builder import build_mesh_gmsh
+        debug_print("        Using Gmsh builder...", level=5)
+        # Gmsh doesn't need pre-generated nodes/edges
+        return build_mesh_gmsh(CompStruct)
+    except Exception as e:
+        debug_print(f"Gmsh failed: {e}, falling back to SciPy", level=1)
+        return _meshfaces_scipy_fallback(nodes, edges, domain_faces, CompStruct, hmax)
 
-    tri = Delaunay(nodes)
-    mesh_points = nodes
+def _meshfaces_scipy_fallback(nodes, edges, domain_faces, CompStruct, hmax):
+    # Generate internal nodes for each domain
+    all_nodes = [nodes]
+    node_offset = len(nodes)
+
+    for domain_id in sorted(domain_faces.keys()):
+        face_edges = domain_faces[domain_id]
+        boundary_nodes = [edges[edge_idx - 1, 0] for edge_idx in face_edges]
+        boundary_nodes.append(edges[face_edges[-1] - 1, 1])
+
+        polygon = nodes[boundary_nodes]
+
+        # Calculate bounding box
+        min_x, max_x = polygon[:, 0].min(), polygon[:, 0].max()
+        min_y, max_y = polygon[:, 1].min(), polygon[:, 1].max()
+
+        # Generate internal grid based on hmax
+        if hmax is None:
+            hmax = 0.16
+
+        nx = max(3, int((max_x - min_x) / hmax))
+        ny = max(3, int((max_y - min_y) / hmax))
+
+        # Create internal grid
+        x_grid = np.linspace(min_x, max_x, nx)
+        y_grid = np.linspace(min_y, max_y, ny)
+        xx, yy = np.meshgrid(x_grid, y_grid)
+        internal_points = np.column_stack([xx.ravel(), yy.ravel()])
+
+        # Keep only points inside polygon and away from boundary
+        from matplotlib.path import Path
+        path = Path(polygon)
+        inside_mask = path.contains_points(internal_points)
+
+        # Remove points too close to boundary
+        for bp in polygon:
+            dist = np.sqrt((internal_points[:, 0] - bp[0]) ** 2 +
+                           (internal_points[:, 1] - bp[1]) ** 2)
+            inside_mask &= (dist > hmax * 0.5)
+
+        internal_points = internal_points[inside_mask]
+
+        if len(internal_points) > 0:
+            debug_print(f"          Domain {domain_id}: +{len(internal_points)} internal nodes", level=5)
+            all_nodes.append(internal_points)
+
+    # Combine all nodes
+    nodes_all = np.vstack(all_nodes)
+
+    # Remove duplicates
+    nodes_unique, unique_idx = np.unique(nodes_all, axis=0, return_index=True)
+    nodes_final = nodes_unique
+
+    debug_print(f"        Total nodes: {len(nodes_final)} (boundary: {len(nodes)})", level=5)
+
+    # Triangulate
+    tri = Delaunay(nodes_final)
+    mesh_points = nodes_final
     triangles = tri.simplices
 
-    centroids = np.mean(nodes[triangles], axis=1)
+    # Assign domain numbers by centroid location
+    centroids = np.mean(nodes_final[triangles], axis=1)
     domain_numbers = _assign_domains(centroids, nodes, edges, domain_faces)
 
+    # Build final MeshTri array
     mesh_tri = np.vstack([triangles.T + 1, domain_numbers])
 
-    debug_print(f"        Mesh: {len(triangles)} triangles, {len(mesh_points)} nodes", level=5)
-
     return mesh_points.T, mesh_tri, domain_numbers, CompStruct
-
 
 def _assign_domains(centroids: np.ndarray, nodes: np.ndarray, edges: np.ndarray,
                     domain_faces: Dict) -> np.ndarray:
     """Assign domain numbers to triangles"""
-    debug_print("      Assigning domains...", level=5)
+    debug_print("      Assigning domains to triangles...", level=5)
 
     n_tri = len(centroids)
     domain_numbers = -np.ones(n_tri, dtype=int)
@@ -234,37 +300,65 @@ def _inpolygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
 
 
 def add_nodes_cubic(MeshNodes: np.ndarray, MeshTri: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict]:
-    """Convert to 10-node cubic elements"""
-    debug_print("      AddNodesCubic: Adding cubic nodes...", level=5)
+    """
+    Convert to 10-node cubic SAFE elements.
+    """
+    debug_print("      AddNodesCubic: Adding cubic interpolation nodes...", level=5)
 
     n_tri = MeshTri.shape[1]
     n_original = MeshNodes.shape[1]
+
+    # Validation
+    max_node_idx = np.max(MeshTri[:3, :])
+    if max_node_idx > n_original:
+        debug_print(f"ERROR: MeshTri contains node index {max_node_idx} but only {n_original} nodes exist!", level=0)
+        debug_print("This usually indicates an off-by-one error in mesh generation.", level=0)
+        raise IndexError(f"Invalid node index {max_node_idx} (max allowed: {n_original})")
+
+    # Ensure integer indices
+    MeshTri = MeshTri.astype(int)
 
     midpoint_cache = {}
     new_nodes = []
     cubic_tri = np.zeros((10, n_tri), dtype=int)
 
     for i in range(n_tri):
+        # Get vertex nodes (1-based from MeshTri)
         n1, n2, n3 = MeshTri[0, i], MeshTri[1, i], MeshTri[2, i]
 
+        # Store vertex nodes
         cubic_tri[0, i] = n1
         cubic_tri[1, i] = n2
         cubic_tri[2, i] = n3
 
-        # Edge midpoints (nodes 4-6)
-        for edge_num, (a, b) in enumerate([(n1, n2), (n2, n3), (n3, n1)], start=3):
+        # Edge midpoints (convert to 0-based for accessing MeshNodes)
+        for edge_idx, (a, b) in enumerate([(n1, n2), (n2, n3), (n3, n1)], start=3):
             key = tuple(sorted((a, b)))
             if key not in midpoint_cache:
-                midpoint_cache[key] = n_original + len(new_nodes) + 1
-                new_nodes.append(0.5 * (MeshNodes[:, a-1] + MeshNodes[:, b-1]))
-            cubic_tri[edge_num, i] = midpoint_cache[key]
+                midpoint_cache[key] = n_original + len(new_nodes)  # 0-based index for new node
+                # Use 0-based indices: a-1, b-1
+                new_nodes.append(0.5 * (MeshNodes[:, a - 1] + MeshNodes[:, b - 1]))
+            cubic_tri[edge_idx, i] = midpoint_cache[key] + 1  # 1-based for MeshTri
 
-        # Centroid (nodes 7-10)
-        centroid = (MeshNodes[:, n1-1] + MeshNodes[:, n2-1] + MeshNodes[:, n3-1]) / 3.0
-        centroid_index = n_original + len(new_nodes) + 1
+        # Compute centroid
+        p1 = MeshNodes[:, n1 - 1]
+        p2 = MeshNodes[:, n2 - 1]
+        p3 = MeshNodes[:, n3 - 1]
+        centroid = (p1 + p2 + p3) / 3.0
+
+        # Interior nodes 6-9 (at 1/3 from vertices to centroid)
+        for j, vertex in enumerate([p1, p2, p3], start=6):
+            interior_point = (2 / 3) * vertex + (1 / 3) * centroid
+            new_node_idx = n_original + len(new_nodes) + 1
+            new_nodes.append(interior_point)
+            cubic_tri[j, i] = new_node_idx
+
+        # Centroid node 10
+        centroid_idx = n_original + len(new_nodes) + 1
         new_nodes.append(centroid)
-        cubic_tri[6:10, i] = centroid_index
+        cubic_tri[9, i] = centroid_idx
 
+    # Append new nodes
     if new_nodes:
         MeshNodes = np.hstack([MeshNodes, np.column_stack(new_nodes)])
 
@@ -274,8 +368,11 @@ def add_nodes_cubic(MeshNodes: np.ndarray, MeshTri: np.ndarray) -> Tuple[np.ndar
         'n_new_nodes_added': len(new_nodes)
     }
 
-    debug_print(f"        Added {len(new_nodes)} nodes ({n_original} → {MeshNodes.shape[1]})", level=5)
+    # Domain numbers - preserve if they exist (4th row)
+    if MeshTri.shape[0] >= 4:
+        cubic_tri[3, :] = MeshTri[3, :]
 
+    debug_print(f"        Added {len(new_nodes)} nodes ({n_original} → {MeshNodes.shape[1]})", level=5)
     return MeshNodes, cubic_tri, MeshProps
 
 
@@ -379,3 +476,10 @@ def make_cont_bedges(DBEdges: np.ndarray, MeshTri: np.ndarray, MeshNodes: np.nda
     debug_print(f"        Connected {len(cont_edges)} edges into continuous boundary", level=5)
 
     return result
+
+def cleanup_gmsh():
+    """Очистка ресурсов Gmsh"""
+    global gmsh, PYGMSH_AVAILABLE
+    if PYGMSH_AVAILABLE and gmsh and gmsh.isInitialized():
+        gmsh.finalize()
+        debug_print("[OK] Gmsh resources cleaned up", level=3)

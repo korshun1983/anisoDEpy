@@ -1,64 +1,50 @@
 """
-St2_2_PrepareModelMethods_sp_SAFE.py
+St2_2_PrepareModelMethods_sp_safe.py
 ====================================
-EXACT MATLAB equivalent - MESH GENERATION ONLY
+NO CYCLIC IMPORTS - RELATIVE IMPORTS INSIDE PACKAGE
 """
-
-import os
 from utils import debug_print
+
+from routines.mesh.prepare_mesh_sp_safe import prepare_mesh_sp_safe
+
+
+from routines.mesh.mesh_generator import (
+    prepare_mesh_bh,
+    meshfaces,
+    add_nodes_cubic,
+    find_bedges,
+    find_edge_orient,
+    make_cont_bedges
+)
+
+from routines.physics.prepare_physprop_fluid_sp_safe import prepare_physprop_fluid_sp_safe
+from routines.physics.prepare_physprop_htti_sp_safe import prepare_physprop_htti_sp_safe
 
 
 def st2_2_prepare_model_methods_sp_safe(CompStruct):
-    """
-    Assign methods for mesh generation.
-    """
+    """Assign methods for mesh generation."""
     debug_print("  St2_2: Assigning computational methods...", level=3)
 
     if 'Methods' not in CompStruct:
         CompStruct['Methods'] = {}
 
     Methods = CompStruct['Methods']
-
-    # FIX: Import each function from its own module
-    from routines.mesh.prepare_mesh_sp_safe import prepare_mesh_sp_safe
     Methods['PrepareMesh'] = prepare_mesh_sp_safe
-    debug_print("    Assigned PrepareMesh", level=4)
-
-    from routines.mesh.prepare_mesh_bh import prepare_mesh_bh
     Methods['PrepareMeshBH'] = prepare_mesh_bh
-    debug_print("    Assigned PrepareMeshBH", level=4)
-
-    # FIX: Each function in its own file
-    from routines.mesh.find_bedges import find_bedges
-    Methods['FindBEdges'] = find_bedges
-    debug_print("    Assigned FindBEdges", level=4)
-
-    from routines.mesh.make_cont_bedges import make_cont_bedges
-    Methods['MakeContBEdges'] = make_cont_bedges
-    debug_print("    Assigned MakeContBEdges", level=4)
-
-    from routines.mesh.find_edge_orient import find_edge_orient
-    Methods['FindEdgeOrient'] = find_edge_orient
-    debug_print("    Assigned FindEdgeOrient", level=4)
-
-    from routines.mesh.add_nodes_cubic import add_nodes_cubic
+    Methods['MeshFaces'] = meshfaces
     Methods['AddNodesCubic'] = add_nodes_cubic
-    debug_print("    Assigned AddNodesCubic", level=4)
+    Methods['FindBEdges'] = find_bedges
+    Methods['MakeContBEdges'] = make_cont_bedges
+    Methods['FindEdgeOrient'] = find_edge_orient
 
-    # Physical properties
     n_domain = CompStruct['Data']['N_domain']
     Methods['PreparePhysProp'] = [None] * n_domain
-
-    from routines.physics.prepare_physprop_fluid_sp_safe import prepare_physprop_fluid_sp_safe
-    from routines.physics.prepare_physprop_htti_sp_safe import prepare_physprop_htti_sp_safe
-
     for ii_d in range(n_domain):
         domain_type = CompStruct['Model']['DomainType'][ii_d]
-        if domain_type == 'fluid':
-            Methods['PreparePhysProp'][ii_d] = prepare_physprop_fluid_sp_safe
-        elif domain_type == 'HTTI':
-            Methods['PreparePhysProp'][ii_d] = prepare_physprop_htti_sp_safe
+        Methods['PreparePhysProp'][ii_d] = (
+            prepare_physprop_fluid_sp_safe if domain_type == 'fluid'
+            else prepare_physprop_htti_sp_safe
+        )
 
-    debug_print("  St2_2: Mesh generation methods assigned", level=3)
-
+    debug_print("  St2_2: Methods assigned", level=3)
     return CompStruct
