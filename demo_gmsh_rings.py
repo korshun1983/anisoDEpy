@@ -4,10 +4,10 @@ Demonstration of gmsh capabilities for multi-domain mesh generation.
 Features:
 1. Three concentric domains created with boolean cut
 2. Mesh size parameter controls element density
-3. Three visualizations:
+3. Two generation methods:
    - Linear mesh (3 nodes/element)
-   - Linear mesh WITH ADDED NODES (shows where extra nodes will be)
-   - 3rd-order mesh (10 nodes/element, straight edges)
+   - Direct high-order mesh generation (10 nodes/element)
+4. Visualization shows added nodes
 """
 
 import gmsh
@@ -19,7 +19,7 @@ from matplotlib.collections import PatchCollection
 # =============================================================================
 # USER CONFIGURATION
 # =============================================================================
-MESH_SIZE = 0.3  # Controls element size - smaller value = finer mesh
+MESH_SIZE = 0.2  # Controls element size - smaller value = finer mesh
 
 # Visualization parameters
 DOMAIN_COLORS = {
@@ -86,11 +86,9 @@ def generate_linear_mesh(domain_ids):
     """Generate linear triangular mesh using global MESH_SIZE"""
     print(f"\nGenerating linear triangular mesh with size {MESH_SIZE}...")
 
-    # THIS IS THE KEY LINE - MESH_SIZE now controls everything
     gmsh.model.mesh.setSize(gmsh.model.getEntities(0), MESH_SIZE)
     gmsh.model.mesh.setAlgorithm(2, domain_ids[0], 5)  # Frontal-Delaunay
 
-    # Generate 2D mesh
     gmsh.model.mesh.generate(2)
     gmsh.model.mesh.setOrder(1)
 
@@ -103,17 +101,28 @@ def generate_linear_mesh(domain_ids):
     return node_tags, node_coords, elem_types, elem_tags, elem_node_tags
 
 
-def add_nodes_to_linear_mesh():
-    """Add nodes to create 3rd-order representation but keep elements linear"""
-    print(f"\nAdding nodes for 3rd order (setOrder=3)...")
+def generate_high_order_mesh(domain_ids, order=3):
+    """Generate high-order mesh DIRECTLY without intermediate linear step"""
+    print(f"\nGenerating {order}rd-order triangular mesh directly...")
 
-    gmsh.model.mesh.setOrder(3)
+    # Set mesh size and algorithm
+    gmsh.model.mesh.setSize(gmsh.model.getEntities(0), MESH_SIZE)
+    gmsh.model.mesh.setAlgorithm(2, domain_ids[0], 5)
+
+    # Generate 2D mesh (initially linear)
+    gmsh.model.mesh.generate(2)
+
+    # Convert to high order directly
+    gmsh.model.mesh.setOrder(order)
 
     node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
     elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
-    print(f"After adding nodes: {len(node_tags)} nodes")
-    print(f"Now each element has 10 nodes (3 vertices + 6 edge + 1 internal)")
+    nodes_per_elem = 10 if order == 3 else 3  # 10 nodes for 3rd order
+
+    print(f"Generated {len(node_tags)} nodes")
+    print(f"Generated {len(elem_tags[0])} triangular elements")
+    print(f"Each element has {nodes_per_elem} nodes")
 
     return node_tags, node_coords, elem_types, elem_tags, elem_node_tags
 
@@ -230,9 +239,9 @@ def visualize_linear_mesh(node_coords, elements_by_domain,
     return fig
 
 
-def visualize_with_added_nodes(node_coords, elements_by_domain,
-                               nodes_by_domain, boundary_nodes):
-    """Visualize mesh WITH ADDED NODES (after setOrder=3) but with straight edges"""
+def visualize_high_order_mesh(node_coords, elements_by_domain,
+                              nodes_by_domain, boundary_nodes):
+    """Visualize high-order mesh with added nodes"""
     fig, ax = plt.subplots(figsize=(10, 10))
 
     coords = node_coords.reshape(-1, 3)[:, :2]
@@ -256,74 +265,13 @@ def visualize_with_added_nodes(node_coords, elements_by_domain,
         ax.add_collection(collection)
 
     # Plot ALL nodes (vertices + edge + internal nodes)
-    for domain_id in [1, 2, 3]:
-        if nodes_by_domain[domain_id]:
-            domain_node_coords = coords[np.array(list(nodes_by_domain[domain_id]), dtype=int) - 1]
-            ax.scatter(domain_node_coords[:, 0], domain_node_coords[:, 1],
-                       c=DOMAIN_COLORS[domain_id], s=40, alpha=0.8,
-                       marker='o', edgecolor='black', linewidth=0.5, zorder=5)
-
-    # Emphasize boundary nodes
-    for boundary_name, bnodes in boundary_nodes.items():
-        if bnodes:
-            bcoords = coords[np.array(list(bnodes), dtype=int) - 1]
-            ax.scatter(bcoords[:, 0], bcoords[:, 1], c='black', s=50,
-                       marker='o', linewidth=3, zorder=10)
-
-    ax.text(0, -3.5, f'Mesh WITH ADDED NODES (setOrder=3)\n'
-                     f'{len(node_coords) // 3} total nodes, mesh_size={MESH_SIZE }',
-    ha = 'center', fontsize = 10)
-
-    for radius in [1.0, 2.0, 3.0]:
-        circle = Circle((0, 0), radius, fill=False, linestyle='--',
-                        edgecolor='gray', alpha=0.5)
-        ax.add_patch(circle)
-
-    ax.set_aspect('equal')
-    ax.set_xlim(-3.2, 3.2)
-    ax.set_ylim(-3.2, 3.2)
-    ax.set_title(f'Linear Mesh WITH ADDED NODES\n(mesh size={MESH_SIZE})')
-
-    plt.tight_layout()
-    return fig
-
-
-def visualize_third_order_mesh(node_coords, elements_by_domain,
-                               nodes_by_domain, boundary_nodes):
-    """Visualize 3rd-order triangular mesh with STRAIGHT edges"""
-    fig, ax = plt.subplots(figsize=(10, 10))
-
-    coords = node_coords.reshape(-1, 3)[:, :2]
-
-    # Plot elements as straight-edged triangles (using only vertices)
-    for domain_id in [1, 2, 3]:
-        patches = []
-        for elem_tag, node_list in elements_by_domain[domain_id]:
-            # Ensure we have enough nodes
-            if len(node_list) < 3:
-                continue
-
-            vertices = coords[np.array(node_list[:3], dtype=int) - 1]
-            polygon = Polygon(vertices, closed=True)
-            patches.append(polygon)
-
-        collection = PatchCollection(
-            patches,
-            facecolor=DOMAIN_COLORS[domain_id],
-            edgecolor='black',
-            alpha=0.5,
-            linewidth=0.5
-        )
-        ax.add_collection(collection)
-
-    # Plot ALL nodes (vertices + edge nodes + internal nodes)
     node_sizes = {1: 15, 2: 12, 3: 10}
     for domain_id in [1, 2, 3]:
         if nodes_by_domain[domain_id]:
             domain_node_coords = coords[np.array(list(nodes_by_domain[domain_id]), dtype=int) - 1]
             ax.scatter(domain_node_coords[:, 0], domain_node_coords[:, 1],
                        c=DOMAIN_COLORS[domain_id], s=node_sizes[domain_id],
-                       alpha=0.8, marker='o', zorder=5)
+                       alpha=0.8, marker='o', edgecolor='black', linewidth=0.5, zorder=5)
 
     # Emphasize boundary nodes
     for boundary_name, bnodes in boundary_nodes.items():
@@ -332,9 +280,8 @@ def visualize_third_order_mesh(node_coords, elements_by_domain,
             ax.scatter(bcoords[:, 0], bcoords[:, 1], c='black', s=50,
                        marker='o', linewidth=3, zorder=10)
 
-    ax.text(0, -3.5,
-            f'3rd-order triangular elements (STRAIGHT edges)\n'
-            f'10 nodes per element, mesh size={MESH_SIZE}',
+    ax.text(0, -3.5, f'3rd-order mesh with {len(node_coords) // 3} nodes\n'
+                     f'(mesh size={MESH_SIZE})',
             ha='center', fontsize=10)
 
     for radius in [1.0, 2.0, 3.0]:
@@ -345,7 +292,7 @@ def visualize_third_order_mesh(node_coords, elements_by_domain,
     ax.set_aspect('equal')
     ax.set_xlim(-3.2, 3.2)
     ax.set_ylim(-3.2, 3.2)
-    ax.set_title('Third-Order Triangular Mesh\n(10 nodes/element, STRAIGHT edges)')
+    ax.set_title(f'3rd-Order Triangular Mesh\n(10 nodes/element, straight edges)')
 
     plt.tight_layout()
     return fig
@@ -380,46 +327,32 @@ def main():
     plt.savefig('mesh_linear.png', dpi=150, bbox_inches='tight')
     print("Saved: mesh_linear.png")
 
-    # Part 2: NOW THIS SHOWS ADDED NODES
+    # Part 2: High-order mesh (direct generation)
     print("\n" + "=" * 50)
-    print("PART 2: LINEAR MESH WITH ADDED NODES")
+    print("PART 2: 3RD-ORDER MESH (DIRECT GENERATION)")
     print("=" * 50)
 
-    # Generate the mesh again and convert to 3rd order
-    gmsh.model.mesh.clear()  # Clear previous mesh
-    generate_linear_mesh(domain_ids)  # Regenerate linear mesh
+    # Clear and regenerate mesh in high order directly
+    gmsh.model.mesh.clear()
     node_tags_ho, node_coords_ho, elem_types_ho, elem_tags_ho, elem_node_tags_ho = \
-        add_nodes_to_linear_mesh()
+        generate_high_order_mesh(domain_ids, order=3)
 
     elements_by_domain_ho, nodes_by_domain_ho, boundary_nodes_ho = \
         get_elements_grouped_by_domain(physical_group_tags)
 
-    fig2 = visualize_with_added_nodes(
+    fig2 = visualize_high_order_mesh(
         node_coords_ho, elements_by_domain_ho,
         nodes_by_domain_ho, boundary_nodes_ho
     )
-    plt.savefig('mesh_with_nodes.png', dpi=150, bbox_inches='tight')
-    print("Saved: mesh_with_nodes.png")
-
-    # Part 3: Third-order mesh
-    print("\n" + "=" * 50)
-    print("PART 3: THIRD-ORDER TRIANGULAR MESH")
-    print("=" * 50)
-
-    # We already have 3rd order from Part 2, just visualize it differently
-    fig3 = visualize_third_order_mesh(
-        node_coords_ho, elements_by_domain_ho,
-        nodes_by_domain_ho, boundary_nodes_ho
-    )
-    plt.savefig('mesh_third_order.png', dpi=150, bbox_inches='tight')
-    print("Saved: mesh_third_order.png")
+    plt.savefig('mesh_high_order.png', dpi=150, bbox_inches='tight')
+    print("Saved: mesh_high_order.png")
 
     # Save mesh files
     gmsh.write("concentric_domains_linear.msh")
     print("Saved: concentric_domains_linear.msh")
 
-    gmsh.write("concentric_domains_third_order.msh")
-    print("Saved: concentric_domains_third_order.msh")
+    gmsh.write("concentric_domains_high_order.msh")
+    print("Saved: concentric_domains_high_order.msh")
 
     # Show plots
     print("\n" + "=" * 50)
@@ -432,10 +365,9 @@ def main():
     print("\nGMSH session finalized.")
     print("\nOutput files:")
     print("  - concentric_domains_linear.msh")
-    print("  - concentric_domains_third_order.msh")
+    print("  - concentric_domains_high_order.msh")
     print("  - mesh_linear.png")
-    print("  - mesh_with_nodes.png")
-    print("  - mesh_third_order.png")
+    print("  - mesh_high_order.png")
 
 
 if __name__ == "__main__":
