@@ -1,211 +1,170 @@
 #!/usr/bin/env python3
 """
-gen_aniso.py
-============
-EXACT MATLAB equivalent - main entry point with JSON file selection dialog.
+Gen_Aniso - Main computation script for acoustic waveguide analysis
+Step 1: Initialization - Python implementation
 """
 
-import os
 import sys
-import json
-import atexit
 from pathlib import Path
-import numpy as np
+import time
+from typing import Optional
 
-# ИМПОРТ СРАЗУ В НАЧАЛО!
-sys.path.insert(0, str(Path(__file__).parent))
-from utils import debug_print, timer  # <-- Импорт ПЕРЕД использованием
-from routines.mesh.mesh_generator import cleanup_gmsh
-
-# Регистрация cleanup ПОСЛЕ успешного импорта
-atexit.register(cleanup_gmsh)
-
-# For file dialog
-try:
-    import tkinter as tk
-    from tkinter import filedialog
-
-    TKINTER_AVAILABLE = True
-except ImportError:
-    TKINTER_AVAILABLE = False
-    debug_print("WARNING: tkinter not available, using command-line fallback", level=1)
-
-# Импорты модулей проекта
-from stage1.st1_set_model import st1_set_model
-from stage2.st2_prepare_model_sp_safe import st2_prepare_model_sp_safe
+# Import from project modules
+from config.structures import CompStruct, InputParam
+from routines.st1_functions import St1_SetModel
 
 
-def select_model_file() -> str:
-    """Open file dialog to select JSON model file."""
-    if not TKINTER_AVAILABLE:
-        return ""
+# ============================================================================
+# FILE DIALOG FUNCTION
+# ============================================================================
 
+def select_json_file() -> Optional[Path]:
+    """
+    Open file dialog to select JSON file
+    Returns Path object or None if cancelled
+    """
     try:
-        root = tk.Tk()
+        from tkinter import Tk, filedialog
+
+        root = Tk()
         root.withdraw()
         root.attributes('-topmost', True)
 
-        # ИСПРАВЛЕННЫЙ путь к модели по умолчанию
-        models_dir = Path(__file__).parent / "models" / "Bakken-B"
-        initial_dir = str(models_dir) if models_dir.exists() else str(Path(__file__).parent / "models")
-
         file_path = filedialog.askopenfilename(
-            title="Select JSON Model File for SAFE Solver",
+            title="Select JSON Model File",
             filetypes=[
-                ("JSON Model Files", "*.json"),
-                ("All Files", "*.*")
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
             ],
-            initialdir=initial_dir
+            initialdir = Path.cwd()/"models"
         )
 
         root.destroy()
-        return file_path
+
+        return Path(file_path) if file_path else None
+
+    except ImportError:
+        print("Warning: tkinter not available. Install python3-tk or specify file via command line.")
+        return None
     except Exception as e:
-        debug_print(f"Could not open file dialog: {e}", level=1)
-        return ""
+        print(f"Warning: Could not open file dialog: {e}")
+        return None
 
 
-def load_model_from_json(file_path: str) -> dict:
-    """Load model configuration from JSON file"""
-    try:
-        with open(file_path, 'r') as f:
-            model_data = json.load(f)
-        debug_print(f"Loaded model from: {Path(file_path).name}", level=2)
-        debug_print(f"  Domains: {len(model_data.get('Model', {}).get('DomainType', []))}", level=3)
-        debug_print(f"  Frequency range: {model_data.get('Model', {}).get('f_array_range', {})}", level=3)
-        return model_data
-    except Exception as e:
-        debug_print(f"ERROR loading JSON file: {e}", level=0)
-        raise
+# ============================================================================
+# MAIN FUNCTION
+# ============================================================================
 
+def gen_aniso(model_name: str = None, json_path: str = None):
+    """
+    Main computation script - analogous to gen_aniso.m
+    Currently implements only Step 1 (Initialization)
+    """
+    print('\n' + '=' * 80)
+    print('Gen_Aniso Program has been started!')
 
-def validate_mesh(MeshNodes, MeshTri, MeshProps):
-    """Validate that mesh generation succeeded"""
-    if MeshNodes is None or MeshTri is None:
-        raise RuntimeError("Mesh generation returned None")
+    tStart_Prog = time.time()
 
-    if MeshNodes.size == 0:
-        raise RuntimeError("Mesh generation failed: no nodes")
-
-    if MeshTri.size == 0:
-        raise RuntimeError("Mesh generation failed: no elements")
-
-    n_nodes = MeshNodes.shape[1]
-    n_elem = MeshTri.shape[1]
-
-    debug_print(f"  Mesh validation: {n_nodes} nodes, {n_elem} elements", level=3)
-
-    # Check domain assignment
-    unique_domains = np.unique(MeshTri[3, :] if MeshTri.shape[0] >= 4 else MeshTri[2, :])
-    debug_print(f"  Domains assigned: {unique_domains}", level=3)
-
-
-def main() -> int:
-    """Main execution function"""
-    debug_print("=" * 80, level=1)
-    debug_print("SAFE SOLVER (Python Implementation)", level=1)
-    debug_print("Based on ANISO_SAFE D5 - Timur Zharnikov", level=1)
-    debug_print("=" * 80, level=1)
-
-    # =========================================================================
-    # Stage 0: Model File Selection
-    # =========================================================================
-    debug_print("STAGE 0: Selecting Model File", level=1)
-
-    model_file = select_model_file()
-
-    if not model_file:
-        # ИСПРАВЛЕННЫЙ путь к модели по умолчанию
-        model_file = Path(__file__).parent / "models" / "Bakken-B" / "BakkenB-00.json"
-
-        if not model_file.exists():
-            debug_print("ERROR: Default model file not found!", level=0)
-            debug_print("Please create models/Bakken-B/BakkenB-00.json or select a model file.", level=0)
-            return 1
+    # Handle file selection
+    if json_path is None:
+        if len(sys.argv) > 1:
+            json_path = sys.argv[1]
+            if model_name is None and len(sys.argv) > 2:
+                model_name = sys.argv[2]
         else:
-            debug_print(f"Using default model: {model_file}", level=2)
+            print('No JSON file specified. Opening file dialog...')
+            selected_file = select_json_file()
 
-    # Load model data
-    model_data = load_model_from_json(str(model_file))
+            if selected_file is None:
+                print("Error: No file selected. Exiting.")
+                sys.exit(1)
 
-    # =========================================================================
-    # Stage 1: Model Setup
-    # =========================================================================
-    with timer("STAGE 1: Model Initialization"):
-        InputParam = st1_set_model(model_data)
+            json_path = str(selected_file)
+            if model_name is None:
+                model_name = selected_file.stem
 
-    # =========================================================================
-    # Stage 2: Model Preparation
-    # =========================================================================
-    with timer("STAGE 2: Model Preparation"):
-        CompStruct = st2_prepare_model_sp_safe(InputParam)
+    model_file = Path(json_path)
+    if not model_file.exists():
+        print(f"Error: Model file '{json_path}' not found.")
+        print(f"Working directory: {Path.cwd()}")
 
-    # =========================================================================
-    # Stage 3: Mesh Generation
-    # =========================================================================
-    debug_print("STAGE 3: Mesh Generation", level=1)
-    with timer("Mesh Generation"):
-        result = CompStruct['Methods']['PrepareMesh'](CompStruct)
-        debug_print(f"PrepareMesh returned: {type(result)} with {len(result) if result else 'None'} items", level=2)
+        print("\nWould you like to select a file manually? (y/n)")
+        response = input().strip().lower()
+        if response == 'y':
+            selected_file = select_json_file()
+            if selected_file and selected_file.exists():
+                json_path = str(selected_file)
+                model_file = selected_file
+                if model_name is None:
+                    model_name = selected_file.stem
+            else:
+                print("No valid file selected. Exiting.")
+                sys.exit(1)
+        else:
+            sys.exit(1)
 
-        # ПРОВЕРКА результата
-        if result is None or len(result) != 5:
-            raise RuntimeError(f"PrepareMesh returned invalid result: {result}")
+    if model_name is None:
+        model_name = model_file.stem
 
-        MeshNodes, BoundaryEdges, MeshTri, MeshProps, CompStruct = result
+    print(f'The used model is {model_name}')
+    print('=' * 80 + '\n')
 
-        # ВАЛИДАЦИЯ сетки
-        validate_mesh(MeshNodes, MeshTri, MeshProps)
+    # Step 1: Initialization
+    print('Running Step 1: Setting up model parameters...\n')
+    tStart_St1 = time.time()
 
-    debug_print(f"Mesh generation complete: {MeshNodes.shape[1]} nodes, {MeshTri.shape[1]} elements", level=1)
+    input_param = St1_SetModel(model_file)
 
-    if CompStruct.get('Advanced', {}).get('VisualizeMesh', False):
-        import matplotlib.pyplot as plt
-        plt.triplot(MeshNodes[0, :], MeshNodes[1, :], MeshTri[:3, :].T - 1)
-        plt.title(f"Mesh: {MeshNodes.shape[1]} nodes")
-        plt.axis('equal')
-        plt.savefig('mesh.png')
-        debug_print("  Mesh visualization saved: mesh.png", level=2)
+    print(f'Time for Step 1 Program = {time.time() - tStart_St1:.1f}s\n')
 
-    # Verify Stage 1 results
-    _verify_stage1(InputParam)
+    # Prepare CompStruct
+    comp_struct = CompStruct(
+        Config=input_param.Config,
+        Model=input_param.Model,
+        Advanced=input_param.Advanced,
+        Methods=input_param.Methods,
+        f_grid=input_param.Model.f_array,
+        ModelInitial=input_param.Model
+    )
 
-    debug_print("=" * 80, level=1)
-    debug_print("ALL STAGES COMPLETED SUCCESSFULLY", level=1)
-    debug_print("Model and mesh are ready for matrix assembly", level=1)
-    debug_print("=" * 80, level=1)
+    # Summary
+    print('\n' + '=' * 80)
+    print('Model Initialization Summary:')
+    print('=' * 80)
+    print(f"Problem Type: {input_param.Config.ProblemType}")
+    print(f"Numerical Method: {input_param.Config.NumMethod}")
+    print(f"Frequency Range: {input_param.Model.f_min:.1f} - {input_param.Model.f_max:.1f} kHz")
+    print(f"Number of Frequencies: {input_param.Model.N_disp}")
+    print(f"Number of Domains: {len(input_param.Model.DomainType)}")
+    print(f"Domain Types: {', '.join(input_param.Model.DomainType)}")
+    print(f"Domain Radii (Rx): {input_param.Model.DomainRx} m")
+    print(f"AddDomain Type: {input_param.Model.AddDomainType}")
+    print(f"AddDomain Exists: {input_param.Model.AddDomain_Exist}")
+    print(f"Max Eigenvalues: {input_param.Advanced.num_eig_max}")
+    print(f"Search Start Velocity: {input_param.Advanced.EigSearchStart} km/s")
+    print('=' * 80)
 
-    return 0
+    print(f'\nTime for Gen_Aniso Program (Step 1) = {time.time() - tStart_Prog:.1f}s')
+    print('=' * 80 + '\n')
 
-
-def _verify_stage1(InputParam):
-    """Verify Stage 1 output structure"""
-    debug_print("Verifying Stage 1 output...", level=2)
-
-    required_keys = ['Config', 'Methods', 'Model', 'Advanced']
-    for key in required_keys:
-        if key not in InputParam:
-            raise KeyError(f"Stage 1 missing required key: {key}")
-
-    # Verify Config
-    config_keys = ['ProblemType', 'NumMethod', 'root_path', 'solver_path']
-    for key in config_keys:
-        if key not in InputParam['Config']:
-            raise KeyError(f"Config missing key: {key}")
-
-    # Verify Model
-    model_keys = ['DomainRx', 'DomainRy', 'DomainType', 'f_array', 'N_disp']
-    for key in model_keys:
-        if key not in InputParam['Model']:
-            raise KeyError(f"Model missing key: {key}")
-
-    debug_print(f"  Config: {len(InputParam['Config'])} parameters", level=3)
-    debug_print(
-        f"  Model: {InputParam['Model']['N_disp']} frequencies, {len(InputParam['Model']['DomainType'])} layers",
-        level=3)
-    debug_print(f"  Advanced: {len(InputParam['Advanced'])} parameters", level=3)
-    debug_print("Stage 1 verification PASSED", level=2)
+    return comp_struct
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
+
+if __name__ == '__main__':
+    try:
+        result = gen_aniso()
+
+        print("\n[OK] Initialization completed successfully!")
+        print(f"Result structure ready with {len(result.Model.DomainType)} domains.")
+        print("\nReady for Step 2: Preparing model...")
+
+    except Exception as e:
+        print(f"\n[BAD] Error during initialization: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
