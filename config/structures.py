@@ -97,6 +97,8 @@ class Methods:
 
     # Step 3 methods
     St3_PrepareBasicMatrices: Optional[Callable] = None
+    St3_ProblemFormulation: Optional[Callable] = None
+    St3_1_PrepareBasicMatrices: Optional[Callable] = None
 
     # Step 4 methods
     St4_ComputeSolution: Optional[Callable] = None
@@ -109,6 +111,51 @@ class Methods:
     ComputeAsymptotes: Optional[Callable] = None
     V_phase_VTI_exact_RPH: Optional[Callable] = None
     MeshFaces: Optional[Callable] = None
+
+    # Mesh methods
+    PrepareMesh: Optional[Callable] = None
+    PrepareMeshBH: Optional[Callable] = None
+    FindBEdges: Optional[Callable] = None
+    MakeContBEdges: Optional[Callable] = None
+    FindEdgeOrient: Optional[Callable] = None
+    AddNodesCubic: Optional[Callable] = None
+
+    # Basis function methods
+    FindPos: Optional[Callable] = None
+    L1L2_int_matrix: Optional[Callable] = None
+    L1L2L3_int_matrix: Optional[Callable] = None
+    NL_matrix: Optional[Callable] = None
+    dNL_matrices: Optional[Callable] = None
+    ConvolveMatrices: Optional[Callable] = None
+    ConvolveEdgeMatrices: Optional[Callable] = None
+    NLEdge_matrix: Optional[Callable] = None
+
+    # Matrix assembly methods
+    AssembleBasicMatrices: Optional[Callable] = None
+
+    # Physical property methods (dictionary)
+    PreparePhysProp: Dict[int, Callable] = field(default_factory=dict)
+
+    # Element matrix methods
+    dxNL_matrix: Optional[Callable] = None
+    dyNL_matrix: Optional[Callable] = None
+
+    # Domain-specific methods (dictionaries)
+    MatricesParts_sp_SAFE: Dict[int, Callable] = field(default_factory=dict)
+    MatricesPartsPML_sp_SAFE: Dict[int, Callable] = field(default_factory=dict)
+    MatricesPartsABC_sp_SAFE: Dict[int, Callable] = field(default_factory=dict)
+    getPhysProps: Dict[int, Callable] = field(default_factory=dict)
+    KM_matrix: Dict[int, Callable] = field(default_factory=dict)
+    KM_el_matrix: Dict[int, Callable] = field(default_factory=dict)
+
+    # Interface and boundary methods (dictionaries)
+    IC_Matrices_sp_SAFE: Dict[int, Callable] = field(default_factory=dict)
+    IC_matrix: Dict[int, Callable] = field(default_factory=dict)
+    IC_el_matrix: Dict[int, Callable] = field(default_factory=dict)
+    AssembleFullMatrices: Dict[int, Callable] = field(default_factory=dict)
+
+    # Variable removal method
+    RemoveRedundantVariables: Optional[Callable] = None
 
 
 @dataclass
@@ -131,3 +178,7 @@ class CompStruct:
     if_grid: int = 0
     Mesh: Dict[str, Any] = field(default_factory=dict)
     ModelInitial: Optional[ModelConfig] = None
+
+    # Step 2 additions
+    Data: Dict[str, Any] = field(default_factory=dict)
+    Misc: Dict[str, Any] = field(default_factory=dict)

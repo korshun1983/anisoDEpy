@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gen_Aniso - Main computation script for acoustic waveguide analysis
-Step 1: Initialization - Python implementation
+Step 1 & 2: Initialization and Model Preparation
 """
 
 import sys
@@ -12,6 +12,7 @@ from typing import Optional
 # Import from project modules
 from config.structures import CompStruct, InputParam
 from routines.st1_functions import St1_SetModel
+from routines.st2_functions import St2_PrepareModel_sp_SAFE
 
 
 # ============================================================================
@@ -36,7 +37,7 @@ def select_json_file() -> Optional[Path]:
                 ("JSON files", "*.json"),
                 ("All files", "*.*")
             ],
-            initialdir = Path.cwd()/"models"
+            initialdir=Path.cwd() / "model"
         )
 
         root.destroy()
@@ -58,7 +59,11 @@ def select_json_file() -> Optional[Path]:
 def gen_aniso(model_name: str = None, json_path: str = None):
     """
     Main computation script - analogous to gen_aniso.m
-    Currently implements only Step 1 (Initialization)
+    Implements Steps 1 and 2
+
+    Parameters:
+        model_name: Name of the model (optional)
+        json_path: Path to JSON file (optional, opens dialog if not provided)
     """
     print('\n' + '=' * 80)
     print('Gen_Aniso Program has been started!')
@@ -117,34 +122,38 @@ def gen_aniso(model_name: str = None, json_path: str = None):
 
     print(f'Time for Step 1 Program = {time.time() - tStart_St1:.1f}s\n')
 
-    # Prepare CompStruct
-    comp_struct = CompStruct(
-        Config=input_param.Config,
-        Model=input_param.Model,
-        Advanced=input_param.Advanced,
-        Methods=input_param.Methods,
-        f_grid=input_param.Model.f_array,
-        ModelInitial=input_param.Model
-    )
+    # Step 2: Prepare Model
+    print('Running Step 2: Preparing model for computation...\n')
+    tStart_St2 = time.time()
+
+    comp_struct = St2_PrepareModel_sp_SAFE(input_param)
+
+    print(f'Time for Step 2 Program = {time.time() - tStart_St2:.1f}s\n')
 
     # Summary
     print('\n' + '=' * 80)
-    print('Model Initialization Summary:')
+    print('Model Preparation Summary:')
     print('=' * 80)
-    print(f"Problem Type: {input_param.Config.ProblemType}")
-    print(f"Numerical Method: {input_param.Config.NumMethod}")
-    print(f"Frequency Range: {input_param.Model.f_min:.1f} - {input_param.Model.f_max:.1f} kHz")
-    print(f"Number of Frequencies: {input_param.Model.N_disp}")
-    print(f"Number of Domains: {len(input_param.Model.DomainType)}")
-    print(f"Domain Types: {', '.join(input_param.Model.DomainType)}")
-    print(f"Domain Radii (Rx): {input_param.Model.DomainRx} m")
-    print(f"AddDomain Type: {input_param.Model.AddDomainType}")
-    print(f"AddDomain Exists: {input_param.Model.AddDomain_Exist}")
-    print(f"Max Eigenvalues: {input_param.Advanced.num_eig_max}")
-    print(f"Search Start Velocity: {input_param.Advanced.EigSearchStart} km/s")
+    print(f"Problem Type: {comp_struct.Config.ProblemType}")
+    print(f"Numerical Method: {comp_struct.Config.NumMethod}")
+    print(f"Frequency Range: {comp_struct.Model.f_min:.1f} - {comp_struct.Model.f_max:.1f} kHz")
+    print(f"Number of Frequencies: {comp_struct.Model.N_disp}")
+    print(f"Number of Domains: {comp_struct.Data['N_domain']}")
+    print(f"Domain Types: {', '.join(comp_struct.Model.DomainType)}")
+    print(f"Variables per domain: {comp_struct.Data['DVarNum']}")
+    print(f"Domain Radii (Rx): {comp_struct.Model.DomainRx} m")
+    print(f"AddDomain Type: {comp_struct.Model.AddDomainType}")
+    print(f"AddDomain Exists: {comp_struct.Model.AddDomain_Exist}")
+    print(f"Max Eigenvalues: {comp_struct.Advanced.num_eig_max}")
+    print(f"Search Start Velocity: {comp_struct.Advanced.EigSearchStart} km/s")
+    print(f"Unit conversions: F={comp_struct.Misc['F_conv']}, S={comp_struct.Misc['S_conv']}")
+
+    # List assigned methods
+    print(f"\nAssigned methods: {len(comp_struct.Methods.PreparePhysProp)} domain methods, "
+          f"{len(comp_struct.Methods.KM_el_matrix)} element matrices")
     print('=' * 80)
 
-    print(f'\nTime for Gen_Aniso Program (Step 1) = {time.time() - tStart_Prog:.1f}s')
+    print(f'\nTime for Gen_Aniso Program (Steps 1-2) = {time.time() - tStart_Prog:.1f}s')
     print('=' * 80 + '\n')
 
     return comp_struct
@@ -158,12 +167,12 @@ if __name__ == '__main__':
     try:
         result = gen_aniso()
 
-        print("\n[OK] Initialization completed successfully!")
-        print(f"Result structure ready with {len(result.Model.DomainType)} domains.")
-        print("\nReady for Step 2: Preparing model...")
+        print("\n✅ Steps 1-2 completed successfully!")
+        print(f"Result structure ready with {result.Data['N_domain']} domains.")
+        print("\nReady for Step 3: Preparing basic matrices...")
 
     except Exception as e:
-        print(f"\n[BAD] Error during initialization: {e}")
+        print(f"\n❌ Error during initialization: {e}")
         import traceback
 
         traceback.print_exc()
