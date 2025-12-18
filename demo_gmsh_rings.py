@@ -1,247 +1,441 @@
 #!/usr/bin/env python3
 """
-demo_gmsh_rings.py
-==================
-Standalone demo showing CORRECT way to create nested domains for SAFE.
-Key point: Use SINGLE mesh, assign domains by centroid location.
+Demonstration of gmsh capabilities for multi-domain mesh generation.
+Features:
+1. Three concentric domains created with boolean cut
+2. Mesh size parameter controls element density
+3. Three visualizations:
+   - Linear mesh (3 nodes/element)
+   - Linear mesh WITH ADDED NODES (shows where extra nodes will be)
+   - 3rd-order mesh (10 nodes/element, straight edges)
 """
 
 import gmsh
 import numpy as np
 import matplotlib.pyplot as plt
-from pathlib import Path
+from matplotlib.patches import Polygon, Circle
+from matplotlib.collections import PatchCollection
+
+# =============================================================================
+# USER CONFIGURATION
+# =============================================================================
+MESH_SIZE = 0.3  # Controls element size - smaller value = finer mesh
+
+# Visualization parameters
+DOMAIN_COLORS = {
+    1: '#ff6b6b',  # Red for inner disk
+    2: '#4ecdc4',  # Teal for middle ring
+    3: '#45b7d1'  # Blue for outer ring
+}
 
 
-def create_unified_mesh(radii: list = [1.0, 2.0, 3.0]):
-    """
-    Create ONE mesh covering all domains, then assign by centroid location.
-    Returns 0-based indices for internal consistency.
-    """
-    print(f"Creating unified mesh for radii: {radii}")
+def create_geometry_with_cut():
+    """Create three concentric circular domains using boolean cut"""
+    print(f"Creating geometry with radii: 1.0, 2.0, 3.0")
+    print(f"Mesh size parameter: {MESH_SIZE}")
 
     gmsh.initialize()
-    gmsh.model.add("WaveGuide")
+    gmsh.model.add("concentric_domains_cut")
 
-    # === 1. Create outermost boundary ===
-    r_max = radii[-1]
-    center = gmsh.model.occ.addPoint(0, 0, 0)
+    # Create three circles
+    circle1 = gmsh.model.occ.addCircle(0, 0, 0, 1.0)
+    curve_loop1 = gmsh.model.occ.addCurveLoop([circle1])
+    surface1 = gmsh.model.occ.addPlaneSurface([curve_loop1])
 
-    # Outer circle points (16 segments for smoothness)
-    n_points = 16
-    points = []
-    arcs = []
-    for i in range(n_points):
-        angle = i * 2 * np.pi / n_points
-        x = r_max * np.cos(angle)
-        y = r_max * np.sin(angle)
-        p = gmsh.model.occ.addPoint(x, y, 0)
-        points.append(p)
+    circle2 = gmsh.model.occ.addCircle(0, 0, 0, 2.0)
+    curve_loop2 = gmsh.model.occ.addCurveLoop([circle2])
+    surface2 = gmsh.model.occ.addPlaneSurface([curve_loop2])
 
-    # Outer circle arcs
-    for i in range(n_points):
-        p1 = points[i]
-        p2 = points[(i + 1) % n_points]
-        arc = gmsh.model.occ.addCircleArc(p1, center, p2)
-        arcs.append(arc)
-
-    # Create outer loop and surface
-    outer_loop = gmsh.model.occ.addCurveLoop(arcs)
-    outer_surface = gmsh.model.occ.addPlaneSurface([outer_loop])
+    circle3 = gmsh.model.occ.addCircle(0, 0, 0, 3.0)
+    curve_loop3 = gmsh.model.occ.addCurveLoop([circle3])
+    surface3 = gmsh.model.occ.addPlaneSurface([curve_loop3])
 
     gmsh.model.occ.synchronize()
 
-    # === 2. Generate mesh ===
-    gmsh.option.setNumber("Mesh.CharacteristicLengthMax", 0.3)
-    gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay
-    gmsh.option.setNumber("Mesh.ElementOrder", 2)  # Quadratic elements
+    # Use boolean cut to create rings
+    outer_ring, _ = gmsh.model.occ.cut([(2, surface3)], [(2, surface2)],
+                                       removeObject=True, removeTool=False)
+    middle_ring, _ = gmsh.model.occ.cut([(2, surface2)], [(2, surface1)],
+                                        removeObject=True, removeTool=False)
 
-    print(f"  Generating mesh...")
+    gmsh.model.occ.synchronize()
+
+    # Get domain IDs
+    domain1_id = surface1
+    domain2_id = middle_ring[0][1]
+    domain3_id = outer_ring[0][1]
+
+    print(f"Domain IDs: {domain1_id}, {domain2_id}, {domain3_id}")
+
+    # Assign physical groups
+    pg_disk = gmsh.model.addPhysicalGroup(2, [domain1_id])
+    gmsh.model.setPhysicalName(2, pg_disk, "Domain_1")
+
+    pg_ring1 = gmsh.model.addPhysicalGroup(2, [domain2_id])
+    gmsh.model.setPhysicalName(2, pg_ring1, "Domain_2")
+
+    pg_ring2 = gmsh.model.addPhysicalGroup(2, [domain3_id])
+    gmsh.model.setPhysicalName(2, pg_ring2, "Domain_3")
+
+    gmsh.model.occ.synchronize()
+
+    return [domain1_id, domain2_id, domain3_id], [pg_disk, pg_ring1, pg_ring2]
+
+
+def generate_linear_mesh(domain_ids):
+    """Generate linear triangular mesh using global MESH_SIZE"""
+    print(f"\nGenerating linear triangular mesh with size {MESH_SIZE}...")
+
+    # THIS IS THE KEY LINE - MESH_SIZE now controls everything
+    gmsh.model.mesh.setSize(gmsh.model.getEntities(0), MESH_SIZE)
+    gmsh.model.mesh.setAlgorithm(2, domain_ids[0], 5)  # Frontal-Delaunay
+
+    # Generate 2D mesh
     gmsh.model.mesh.generate(2)
+    gmsh.model.mesh.setOrder(1)
 
-    # === 3. Extract mesh data (0-based indices) ===
-    node_tags, coord, _ = gmsh.model.mesh.getNodes()
-    elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements()
+    node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+    elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
-    n_nodes = len(coord) // 3
-    nodes = coord.reshape(n_nodes, 3)[:, :2]
+    print(f"Generated {len(node_tags)} nodes")
+    print(f"Generated {len(elem_tags[0])} triangular elements")
 
-    # Find triangles
-    tri_idx = -1
-    for idx, etype in enumerate(elem_types):
-        if etype in [2, 9]:
-            tri_idx = idx
-            break
-
-    if tri_idx == -1:
-        raise RuntimeError("No triangles found!")
-
-    # Get triangles (0-based)
-    if elem_types[tri_idx] == 9:  # Tri6
-        triangles = elem_node_tags[tri_idx].reshape(-1, 6)[:, :3] - 1
-    else:  # Tri3
-        triangles = elem_node_tags[tri_idx].reshape(-1, 3) - 1
-
-    n_elem = len(triangles)
-
-    # === 4. Assign domains by centroid location ===
-    domain_numbers = np.zeros(n_elem, dtype=int)
-    centroids = np.mean(nodes[triangles], axis=1)
-    centroid_radius = np.sqrt(centroids[:, 0] ** 2 + centroids[:, 1] ** 2)
-
-    # 0: r < radii[0], 1: radii[0] <= r < radii[1], 2: radii[1] <= r <= radii[2]
-    domain_numbers[centroid_radius <= radii[0]] = 0
-    domain_numbers[(centroid_radius > radii[0]) & (centroid_radius <= radii[1])] = 1
-    domain_numbers[(centroid_radius > radii[1]) & (centroid_radius <= radii[2])] = 2
-
-    print(f"  Domain assignment: {np.bincount(domain_numbers)}")
-
-    # Return 0-based triangles and domain numbers
-    # Note: vertices are 0-based, domain numbers are in 4th row
-    mesh_tri = np.vstack([triangles.T, domain_numbers])
-
-    gmsh.finalize()
-
-    return nodes, mesh_tri, domain_numbers
+    return node_tags, node_coords, elem_types, elem_tags, elem_node_tags
 
 
-def add_cubic_nodes(nodes: np.ndarray, mesh_tri: np.ndarray):
-    """
-    Convert linear triangles to 10-node cubic elements
-    Expects 0-based vertex indices in mesh_tri
-    Returns SAFE-format with 1-based indices
-    """
-    print(f"Converting to 10-node cubic elements...")
-    print(f"  Input: nodes={nodes.shape}, elements={mesh_tri.shape[1]}")
+def add_nodes_to_linear_mesh():
+    """Add nodes to create 3rd-order representation but keep elements linear"""
+    print(f"\nAdding nodes for 3rd order (setOrder=3)...")
 
-    n_tri = mesh_tri.shape[1]
-    n_original = nodes.shape[0]
+    gmsh.model.mesh.setOrder(3)
 
-    midpoint_cache = {}
-    new_nodes = []
-    cubic_tri = np.zeros((10, n_tri), dtype=int)
+    node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+    elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
-    for i in range(n_tri):
-        # Get 0-based vertex indices - ПРЕОБРАЗУЕМ В INT ЗДЕСЬ
-        n1 = int(mesh_tri[0, i])
-        n2 = int(mesh_tri[1, i])
-        n3 = int(mesh_tri[2, i])
+    print(f"After adding nodes: {len(node_tags)} nodes")
+    print(f"Now each element has 10 nodes (3 vertices + 6 edge + 1 internal)")
 
-        # Validate indices
-        if not (0 <= n1 < n_original and 0 <= n2 < n_original and 0 <= n3 < n_original):
-            raise ValueError(f"Invalid node indices: {n1}, {n2}, {n3} (max: {n_original - 1})")
+    return node_tags, node_coords, elem_types, elem_tags, elem_node_tags
 
-        # Store vertex nodes (1-based for SAFE)
-        cubic_tri[0, i] = n1 + 1
-        cubic_tri[1, i] = n2 + 1
-        cubic_tri[2, i] = n3 + 1
 
-        # Edge midpoints - a и b уже int
-        for edge_idx, (a, b) in enumerate([(n1, n2), (n2, n3), (n3, n1)], start=3):
-            key = tuple(sorted((a, b)))
-            if key not in midpoint_cache:
-                midpoint_cache[key] = n_original + len(new_nodes)
-                new_nodes.append(0.5 * (nodes[a] + nodes[b]))
+def get_elements_grouped_by_domain(physical_group_tags):
+    """Group elements and nodes by physical domain"""
+    elements_by_domain = {1: [], 2: [], 3: []}
+    nodes_by_domain = {1: set(), 2: set(), 3: set()}
 
-            cubic_tri[edge_idx, i] = midpoint_cache[key] + 1
+    # Get all elements
+    elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2)
 
-        # Compute centroid
-        p1 = nodes[n1]
-        p2 = nodes[n2]
-        p3 = nodes[n3]
-        centroid = (p1 + p2 + p3) / 3.0
+    if len(elem_types) == 0 or len(elem_tags) == 0:
+        print("No elements found!")
+        return elements_by_domain, nodes_by_domain, {'1-2': set(), '2-3': set()}
 
-        # Interior nodes
-        for j, vertex in enumerate([p1, p2, p3], start=6):
-            interior = (2 / 3) * vertex + (1 / 3) * centroid
-            new_nodes.append(interior)
-            cubic_tri[j, i] = n_original + len(new_nodes)
+    # Build element-to-entity map
+    element_to_entity = {}
+    for domain_num, pg_tag in enumerate(physical_group_tags, 1):
+        try:
+            entities = gmsh.model.getEntitiesForPhysicalGroup(2, pg_tag)
+            if entities.size > 0:
+                for entity_id in entities:
+                    elem_types_ent, elem_tags_ent, elem_nodes_ent = gmsh.model.mesh.getElements(2, entity_id)
+                    if len(elem_types_ent) > 0 and len(elem_tags_ent) > 0:
+                        elem_type = elem_types_ent[0]
+                        nodes_per_elem = 3 if elem_type == 2 else 10
 
-        # Centroid node (node 10)
-        new_nodes.append(centroid)
-        cubic_tri[9, i] = n_original + len(new_nodes)
+                        for elem_tag in elem_tags_ent[0]:
+                            element_to_entity[elem_tag] = (domain_num, nodes_per_elem)
+        except Exception as e:
+            print(f"Warning: Could not get elements for physical group {pg_tag}: {e}")
 
-    # Append new nodes - преобразуем список в numpy array
-    if new_nodes:
-        new_nodes_array = np.vstack(new_nodes)
-        nodes = np.vstack([nodes, new_nodes_array])
+    # Process elements
+    tri_elements = elem_tags[0]
+    tri_nodes = elem_node_tags[0]
 
-    props = {
-        'n_nodes_per_element': 10,
-        'n_elements': n_tri,
-        'n_new_nodes_added': len(new_nodes)
+    for i, elem_tag in enumerate(tri_elements):
+        if elem_tag in element_to_entity:
+            domain, nodes_per_elem = element_to_entity[elem_tag]
+            start_idx = i * nodes_per_elem
+            end_idx = start_idx + nodes_per_elem
+            node_list = tri_nodes[start_idx:end_idx]
+
+            elements_by_domain[domain].append((elem_tag, list(node_list)))
+            nodes_by_domain[domain].update(node_list)
+
+    # Find boundary nodes
+    boundary_nodes = {
+        '1-2': nodes_by_domain[1] & nodes_by_domain[2],
+        '2-3': nodes_by_domain[2] & nodes_by_domain[3]
     }
 
-    print(f"  Added {len(new_nodes)} new nodes ({n_original} → {nodes.shape[0]})")
+    total_elems = sum(len(v) for v in elements_by_domain.values())
+    print(f"Total elements assigned: {total_elems}")
 
-    return nodes, cubic_tri, props
+    return elements_by_domain, nodes_by_domain, boundary_nodes
 
 
-def visualize_mesh(nodes: np.ndarray, mesh_tri: np.ndarray, title: str, filename: str):
-    """
-    Visualize mesh with domain coloring
-    nodes: (N, 2) array
-    mesh_tri: (4, n_elem) array - 0-based vertex indices + domain numbers
-    """
-    print(f"  Visualizing: {filename}")
-
+def visualize_linear_mesh(node_coords, elements_by_domain,
+                          nodes_by_domain, boundary_nodes):
+    """Visualize linear triangular mesh"""
     fig, ax = plt.subplots(figsize=(10, 10))
 
-    # Get triangles (0-based)
-    tri = mesh_tri[:3, :].T.astype(int)
-    domain_colors = mesh_tri[3, :]
+    coords = node_coords.reshape(-1, 3)[:, :2]
 
-    unique_domains = np.unique(domain_colors)
-    colors = plt.cm.Set1(np.linspace(0, 1, len(unique_domains)))
+    # Plot elements
+    for domain_id in [1, 2, 3]:
+        patches = []
+        for elem_tag, node_list in elements_by_domain[domain_id]:
+            vertices = coords[np.array(node_list[:3], dtype=int) - 1]
+            polygon = Polygon(vertices, closed=True)
+            patches.append(polygon)
 
-    for i, domain_id in enumerate(unique_domains):
-        mask = domain_colors == domain_id
-        tri_domain = tri[mask]
+        collection = PatchCollection(
+            patches,
+            facecolor=DOMAIN_COLORS[domain_id],
+            edgecolor='black',
+            alpha=0.6,
+            linewidth=0.5
+        )
+        ax.add_collection(collection)
 
-        # Plot edges
-        ax.triplot(nodes[:, 0], nodes[:, 1], tri_domain,
-                   color=colors[i], lw=0.5, alpha=0.7)
+    # Plot nodes (small dots)
+    for domain_id in [1, 2, 3]:
+        if nodes_by_domain[domain_id]:
+            domain_node_coords = coords[np.array(list(nodes_by_domain[domain_id]), dtype=int) - 1]
+            ax.scatter(domain_node_coords[:, 0], domain_node_coords[:, 1],
+                       c=DOMAIN_COLORS[domain_id], s=15, alpha=0.6,
+                       marker='.', zorder=5)
 
-        # Plot nodes
-        nodes_in_domain = np.unique(tri_domain.flatten())
-        ax.plot(nodes[nodes_in_domain, 0], nodes[nodes_in_domain, 1],
-                'o', color=colors[i], markersize=4, label=f'Domain {domain_id}')
+    # Plot boundary nodes
+    for boundary_name, bnodes in boundary_nodes.items():
+        if bnodes:
+            bcoords = coords[np.array(list(bnodes), dtype=int) - 1]
+            ax.scatter(bcoords[:, 0], bcoords[:, 1], c='black', s=50,
+                       marker='o', linewidth=2, zorder=10)
 
-    ax.set_title(f"{title}\n{nodes.shape[0]} nodes, {mesh_tri.shape[1]} elements")
-    ax.axis('equal')
-    ax.legend()
+    # Show domain boundaries
+    for radius in [1.0, 2.0, 3.0]:
+        circle = Circle((0, 0), radius, fill=False, linestyle='--',
+                        edgecolor='gray', alpha=0.5)
+        ax.add_patch(circle)
 
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
-    plt.close()
+    ax.set_aspect('equal')
+    ax.set_xlim(-3.2, 3.2)
+    ax.set_ylim(-3.2, 3.2)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_title(f'Linear Triangular Mesh\n(3 nodes/element, mesh size={MESH_SIZE})')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    return fig
+
+
+def visualize_with_added_nodes(node_coords, elements_by_domain,
+                               nodes_by_domain, boundary_nodes):
+    """Visualize mesh WITH ADDED NODES (after setOrder=3) but with straight edges"""
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    coords = node_coords.reshape(-1, 3)[:, :2]
+
+    # Plot elements as straight-edged triangles (using only vertices)
+    for domain_id in [1, 2, 3]:
+        patches = []
+        for elem_tag, node_list in elements_by_domain[domain_id]:
+            # Use only first 3 nodes (vertices) for straight edges
+            vertices = coords[np.array(node_list[:3], dtype=int) - 1]
+            polygon = Polygon(vertices, closed=True)
+            patches.append(polygon)
+
+        collection = PatchCollection(
+            patches,
+            facecolor=DOMAIN_COLORS[domain_id],
+            edgecolor='black',
+            alpha=0.4,
+            linewidth=0.5
+        )
+        ax.add_collection(collection)
+
+    # Plot ALL nodes (vertices + edge + internal nodes)
+    for domain_id in [1, 2, 3]:
+        if nodes_by_domain[domain_id]:
+            domain_node_coords = coords[np.array(list(nodes_by_domain[domain_id]), dtype=int) - 1]
+            ax.scatter(domain_node_coords[:, 0], domain_node_coords[:, 1],
+                       c=DOMAIN_COLORS[domain_id], s=40, alpha=0.8,
+                       marker='o', edgecolor='black', linewidth=0.5, zorder=5)
+
+    # Emphasize boundary nodes
+    for boundary_name, bnodes in boundary_nodes.items():
+        if bnodes:
+            bcoords = coords[np.array(list(bnodes), dtype=int) - 1]
+            ax.scatter(bcoords[:, 0], bcoords[:, 1], c='black', s=50,
+                       marker='o', linewidth=3, zorder=10)
+
+    ax.text(0, -3.5, f'Mesh WITH ADDED NODES (setOrder=3)\n'
+                     f'{len(node_coords) // 3} total nodes, mesh_size={MESH_SIZE }',
+    ha = 'center', fontsize = 10)
+
+    for radius in [1.0, 2.0, 3.0]:
+        circle = Circle((0, 0), radius, fill=False, linestyle='--',
+                        edgecolor='gray', alpha=0.5)
+        ax.add_patch(circle)
+
+    ax.set_aspect('equal')
+    ax.set_xlim(-3.2, 3.2)
+    ax.set_ylim(-3.2, 3.2)
+    ax.set_title(f'Linear Mesh WITH ADDED NODES\n(mesh size={MESH_SIZE})')
+
+    plt.tight_layout()
+    return fig
+
+
+def visualize_third_order_mesh(node_coords, elements_by_domain,
+                               nodes_by_domain, boundary_nodes):
+    """Visualize 3rd-order triangular mesh with STRAIGHT edges"""
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    coords = node_coords.reshape(-1, 3)[:, :2]
+
+    # Plot elements as straight-edged triangles (using only vertices)
+    for domain_id in [1, 2, 3]:
+        patches = []
+        for elem_tag, node_list in elements_by_domain[domain_id]:
+            # Ensure we have enough nodes
+            if len(node_list) < 3:
+                continue
+
+            vertices = coords[np.array(node_list[:3], dtype=int) - 1]
+            polygon = Polygon(vertices, closed=True)
+            patches.append(polygon)
+
+        collection = PatchCollection(
+            patches,
+            facecolor=DOMAIN_COLORS[domain_id],
+            edgecolor='black',
+            alpha=0.5,
+            linewidth=0.5
+        )
+        ax.add_collection(collection)
+
+    # Plot ALL nodes (vertices + edge nodes + internal nodes)
+    node_sizes = {1: 15, 2: 12, 3: 10}
+    for domain_id in [1, 2, 3]:
+        if nodes_by_domain[domain_id]:
+            domain_node_coords = coords[np.array(list(nodes_by_domain[domain_id]), dtype=int) - 1]
+            ax.scatter(domain_node_coords[:, 0], domain_node_coords[:, 1],
+                       c=DOMAIN_COLORS[domain_id], s=node_sizes[domain_id],
+                       alpha=0.8, marker='o', zorder=5)
+
+    # Emphasize boundary nodes
+    for boundary_name, bnodes in boundary_nodes.items():
+        if bnodes:
+            bcoords = coords[np.array(list(bnodes), dtype=int) - 1]
+            ax.scatter(bcoords[:, 0], bcoords[:, 1], c='black', s=50,
+                       marker='o', linewidth=3, zorder=10)
+
+    ax.text(0, -3.5,
+            f'3rd-order triangular elements (STRAIGHT edges)\n'
+            f'10 nodes per element, mesh size={MESH_SIZE}',
+            ha='center', fontsize=10)
+
+    for radius in [1.0, 2.0, 3.0]:
+        circle = Circle((0, 0), radius, fill=False, linestyle='--',
+                        edgecolor='gray', alpha=0.5)
+        ax.add_patch(circle)
+
+    ax.set_aspect('equal')
+    ax.set_xlim(-3.2, 3.2)
+    ax.set_ylim(-3.2, 3.2)
+    ax.set_title('Third-Order Triangular Mesh\n(10 nodes/element, STRAIGHT edges)')
+
+    plt.tight_layout()
+    return fig
 
 
 def main():
-    print("=" * 70)
-    print("Demo: Gmsh Nested Domains with Cubic Elements")
-    print("=" * 70)
+    """Main execution"""
+    print("=" * 60)
+    print("GMSH Multi-Domain Mesh Generation Demo")
+    print("=" * 60)
+    print(f"Configuration:")
+    print(f"  Mesh size: {MESH_SIZE}")
 
-    # 1. Create geometry and mesh
-    nodes, mesh_tri, domains = create_unified_mesh([1.0, 2.0, 3.0])
+    # Create geometry
+    domain_ids, physical_group_tags = create_geometry_with_cut()
 
-    # 2. Visualize linear mesh
-    visualize_mesh(nodes, mesh_tri,
-                   "Linear Triangular Mesh",
-                   "demo_linear_mesh.png")
+    # Part 1: Linear mesh
+    print("\n" + "=" * 50)
+    print("PART 1: LINEAR TRIANGULAR MESH")
+    print("=" * 50)
 
-    # 3. Convert to cubic elements
-    nodes_cubic, mesh_cubic, props = add_cubic_nodes(nodes, mesh_tri)
+    node_tags_lin, node_coords_lin, elem_types_lin, elem_tags_lin, elem_node_tags_lin = \
+        generate_linear_mesh(domain_ids)
 
-    # 4. Visualize cubic mesh
-    visualize_mesh(nodes_cubic, mesh_cubic,
-                   "Cubic (10-node) Triangular Mesh",
-                   "demo_cubic_mesh.png")
+    elements_by_domain_lin, nodes_by_domain_lin, boundary_nodes_lin = \
+        get_elements_grouped_by_domain(physical_group_tags)
 
-    print("=" * 70)
-    print("✓ Demo completed successfully!")
-    print("  Files created:")
-    print("    - demo_linear_mesh.png")
-    print("    - demo_cubic_mesh.png")
-    print("  Open in Gmsh: gmsh geometry_debug.brep (not generated in this version)")
-    print("=" * 70)
+    fig1 = visualize_linear_mesh(
+        node_coords_lin, elements_by_domain_lin,
+        nodes_by_domain_lin, boundary_nodes_lin
+    )
+    plt.savefig('mesh_linear.png', dpi=150, bbox_inches='tight')
+    print("Saved: mesh_linear.png")
+
+    # Part 2: NOW THIS SHOWS ADDED NODES
+    print("\n" + "=" * 50)
+    print("PART 2: LINEAR MESH WITH ADDED NODES")
+    print("=" * 50)
+
+    # Generate the mesh again and convert to 3rd order
+    gmsh.model.mesh.clear()  # Clear previous mesh
+    generate_linear_mesh(domain_ids)  # Regenerate linear mesh
+    node_tags_ho, node_coords_ho, elem_types_ho, elem_tags_ho, elem_node_tags_ho = \
+        add_nodes_to_linear_mesh()
+
+    elements_by_domain_ho, nodes_by_domain_ho, boundary_nodes_ho = \
+        get_elements_grouped_by_domain(physical_group_tags)
+
+    fig2 = visualize_with_added_nodes(
+        node_coords_ho, elements_by_domain_ho,
+        nodes_by_domain_ho, boundary_nodes_ho
+    )
+    plt.savefig('mesh_with_nodes.png', dpi=150, bbox_inches='tight')
+    print("Saved: mesh_with_nodes.png")
+
+    # Part 3: Third-order mesh
+    print("\n" + "=" * 50)
+    print("PART 3: THIRD-ORDER TRIANGULAR MESH")
+    print("=" * 50)
+
+    # We already have 3rd order from Part 2, just visualize it differently
+    fig3 = visualize_third_order_mesh(
+        node_coords_ho, elements_by_domain_ho,
+        nodes_by_domain_ho, boundary_nodes_ho
+    )
+    plt.savefig('mesh_third_order.png', dpi=150, bbox_inches='tight')
+    print("Saved: mesh_third_order.png")
+
+    # Save mesh files
+    gmsh.write("concentric_domains_linear.msh")
+    print("Saved: concentric_domains_linear.msh")
+
+    gmsh.write("concentric_domains_third_order.msh")
+    print("Saved: concentric_domains_third_order.msh")
+
+    # Show plots
+    print("\n" + "=" * 50)
+    print("Displaying all visualizations...")
+    print("=" * 50)
+    plt.show()
+
+    # Finalize
+    gmsh.finalize()
+    print("\nGMSH session finalized.")
+    print("\nOutput files:")
+    print("  - concentric_domains_linear.msh")
+    print("  - concentric_domains_third_order.msh")
+    print("  - mesh_linear.png")
+    print("  - mesh_with_nodes.png")
+    print("  - mesh_third_order.png")
 
 
 if __name__ == "__main__":
